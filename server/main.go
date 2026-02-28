@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/creack/pty"
@@ -391,6 +394,292 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Search types
+type SearchResult struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+type SearchResponse struct {
+	Results   []SearchResult `json:"results"`
+	Truncated bool           `json:"truncated"`
+}
+
+// File listing types
+type FileListEntry struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
+
+type FilesRecursiveResponse struct {
+	Files     []FileListEntry `json:"files"`
+	Truncated bool            `json:"truncated"`
+}
+
+// Directories to exclude from recursive file listing and search
+var excludeDirs = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	"build":        true,
+	"dist":         true,
+}
+
+// GET /search?path=<workspace>&q=<query>&regex=false&caseSensitive=false
+func handleSearch(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	query := r.URL.Query().Get("q")
+	regexStr := r.URL.Query().Get("regex")
+	caseSensitiveStr := r.URL.Query().Get("caseSensitive")
+
+	if dirPath == "" || query == "" {
+		jsonError(w, "path and q parameters required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		jsonError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	if !isWithinWorkspace(absPath) {
+		jsonError(w, "path outside workspace", http.StatusForbidden)
+		return
+	}
+
+	isRegex := regexStr == "true"
+	isCaseSensitive := caseSensitiveStr == "true"
+
+	const maxResults = 500
+
+	// Try ripgrep first, fallback to grep
+	results, truncated, err := searchWithRipgrep(absPath, query, isRegex, isCaseSensitive, maxResults)
+	if err != nil {
+		// Fallback to grep
+		results, truncated, err = searchWithGrep(absPath, query, isRegex, isCaseSensitive, maxResults)
+		if err != nil {
+			jsonError(w, "search failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	jsonResponse(w, SearchResponse{
+		Results:   results,
+		Truncated: truncated,
+	})
+}
+
+func searchWithRipgrep(dir, query string, isRegex, isCaseSensitive bool, maxResults int) ([]SearchResult, bool, error) {
+	args := []string{
+		"--no-heading",
+		"--line-number",
+		"--color", "never",
+		"--max-count", strconv.Itoa(maxResults),
+	}
+
+	if !isCaseSensitive {
+		args = append(args, "--ignore-case")
+	}
+
+	if !isRegex {
+		args = append(args, "--fixed-strings")
+	}
+
+	// Exclude directories
+	for d := range excludeDirs {
+		args = append(args, "--glob", "!"+d)
+	}
+
+	args = append(args, query, dir)
+
+	cmd := exec.Command("rg", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// rg returns exit code 1 for no matches, which is not an error
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []SearchResult{}, false, nil
+		}
+		return nil, false, err
+	}
+
+	return parseSearchOutput(string(output), dir, maxResults)
+}
+
+func searchWithGrep(dir, query string, isRegex, isCaseSensitive bool, maxResults int) ([]SearchResult, bool, error) {
+	args := []string{"-rn", "--color=never"}
+
+	if !isCaseSensitive {
+		args = append(args, "-i")
+	}
+
+	if !isRegex {
+		args = append(args, "-F")
+	}
+
+	// Exclude directories
+	for d := range excludeDirs {
+		args = append(args, fmt.Sprintf("--exclude-dir=%s", d))
+	}
+
+	args = append(args, query, dir)
+
+	cmd := exec.Command("grep", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// grep returns exit code 1 for no matches
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []SearchResult{}, false, nil
+		}
+		return nil, false, err
+	}
+
+	return parseSearchOutput(string(output), dir, maxResults)
+}
+
+func parseSearchOutput(output, baseDir string, maxResults int) ([]SearchResult, bool, error) {
+	var results []SearchResult
+	truncated := false
+
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Format: file:line:text
+		// Find first colon (file path may contain colons on Windows, but we handle Unix-style)
+		firstColon := strings.Index(line, ":")
+		if firstColon < 0 {
+			continue
+		}
+		rest := line[firstColon+1:]
+		secondColon := strings.Index(rest, ":")
+		if secondColon < 0 {
+			continue
+		}
+
+		filePath := line[:firstColon]
+		lineNumStr := rest[:secondColon]
+		text := rest[secondColon+1:]
+
+		lineNum, err := strconv.Atoi(lineNumStr)
+		if err != nil {
+			continue
+		}
+
+		// Make path relative to baseDir for cleaner output
+		relPath, err := filepath.Rel(baseDir, filePath)
+		if err != nil {
+			relPath = filePath
+		}
+
+		results = append(results, SearchResult{
+			File: relPath,
+			Line: lineNum,
+			Text: strings.TrimRight(text, "\r\n"),
+		})
+
+		if len(results) >= maxResults {
+			truncated = true
+			break
+		}
+	}
+
+	if results == nil {
+		results = []SearchResult{}
+	}
+
+	return results, truncated, nil
+}
+
+// GET /files-recursive?path=<workspace>&limit=5000
+func handleFilesRecursive(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		jsonError(w, "path parameter required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		jsonError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	if !isWithinWorkspace(absPath) {
+		jsonError(w, "path outside workspace", http.StatusForbidden)
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 5000
+	if limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	var files []FileListEntry
+	truncated := false
+
+	err = filepath.WalkDir(absPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // Skip entries with errors
+		}
+
+		// Skip excluded directories
+		if d.IsDir() && excludeDirs[d.Name()] {
+			return filepath.SkipDir
+		}
+
+		// Skip hidden directories and files
+		if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Only include files, not directories
+		if d.IsDir() {
+			return nil
+		}
+
+		if len(files) >= limit {
+			truncated = true
+			return filepath.SkipAll
+		}
+
+		relPath, err := filepath.Rel(absPath, path)
+		if err != nil {
+			relPath = path
+		}
+
+		files = append(files, FileListEntry{
+			Path: relPath,
+			Name: d.Name(),
+		})
+
+		return nil
+	})
+
+	if err != nil {
+		jsonError(w, "failed to list files: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if files == nil {
+		files = []FileListEntry{}
+	}
+
+	jsonResponse(w, FilesRecursiveResponse{
+		Files:     files,
+		Truncated: truncated,
+	})
+}
+
 func main() {
 	var addr = flag.String("addr", "localhost:3000", "http service address")
 	var workspace = flag.String("workspace", "", "workspace root directory (auto-detected from first /files request if not set)")
@@ -429,6 +718,10 @@ func main() {
 		}
 		jsonResponse(w, map[string]string{"path": home})
 	}))
+
+	// Search endpoints
+	http.HandleFunc("/search", corsMiddleware(handleSearch))
+	http.HandleFunc("/files-recursive", corsMiddleware(handleFilesRecursive))
 
 	// Terminal endpoint
 	http.HandleFunc("/term", handleTerminal)

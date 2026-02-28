@@ -3,7 +3,7 @@ import './ActivityBar.css';
 
 const PANELS = [
     { id: 'explorer', label: 'Explorer', icon: 'files' },
-    { id: 'search', label: 'Search', icon: 'search', disabled: true },
+    { id: 'search', label: 'Search', icon: 'search' },
     { id: 'git', label: 'Source Control', icon: 'git', disabled: true },
 ];
 

@@ -5,6 +5,8 @@ import FileExplorer from './components/FileExplorer';
 import FolderPicker from './components/FolderPicker';
 import TabBar from './components/TabBar';
 import ActivityBar from './components/ActivityBar';
+import SearchPanel from './components/SearchPanel';
+import QuickOpen from './components/QuickOpen';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ToastProvider } from './components/Toast';
 import './App.css';
@@ -17,6 +19,7 @@ function AppContent() {
     activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
   } = useWorkspace();
   const [activePanel, setActivePanel] = useState('explorer');
+  const [isQuickOpenVisible, setIsQuickOpenVisible] = useState(false);
 
   const handlePanelToggle = useCallback((panelId) => {
     setActivePanel(prev => prev === panelId ? null : panelId);
@@ -53,6 +56,14 @@ function AppContent() {
           }
           switchTab(openTabs[nextIdx].id);
         }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+        e.preventDefault();
+        setActivePanel('search');
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+        e.preventDefault();
+        setIsQuickOpenVisible(prev => !prev);
       }
     };
     document.addEventListener('keydown', handler);
@@ -119,16 +130,12 @@ function AppContent() {
       {showFolderPicker && (
         <FolderPicker onSelect={selectFolder} onCancel={cancelFolderPicker} />
       )}
+      <QuickOpen isOpen={isQuickOpenVisible} onClose={() => setIsQuickOpenVisible(false)} />
       <ActivityBar activePanel={activePanel} onPanelToggle={handlePanelToggle} />
       {activePanel && (
         <div className="side-panel">
           {activePanel === 'explorer' && <FileExplorer />}
-          {activePanel === 'search' && (
-            <div className="panel-placeholder">
-              <p>Search</p>
-              <p className="panel-placeholder-sub">Coming soon</p>
-            </div>
-          )}
+          {activePanel === 'search' && <SearchPanel />}
           {activePanel === 'git' && (
             <div className="panel-placeholder">
               <p>Source Control</p>

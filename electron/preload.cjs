@@ -21,4 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     watchDirectory: (dirPath) => ipcRenderer.invoke('watch-directory', dirPath),
     onDirectoryChanged: (callback) => ipcRenderer.on('directory-changed', (event, data) => callback(data)),
     removeDirectoryListener: () => ipcRenderer.removeAllListeners('directory-changed'),
+
+    // Search
+    searchFiles: (dirPath, query, options) => ipcRenderer.invoke('search-files', dirPath, query, options),
+    listFilesRecursive: (dirPath, limit) => ipcRenderer.invoke('list-files-recursive', dirPath, limit),
 });
