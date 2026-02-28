@@ -248,6 +248,247 @@ app.whenReady().then(() => {
         return { files, truncated };
     });
 
+    // Git operations
+    ipcMain.handle('git-status', async (event, dirPath) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['status', '--porcelain', '-z'], {
+                cwd: dirPath,
+                timeout: 30000,
+                maxBuffer: 10 * 1024 * 1024,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    if (stderr && stderr.includes('not a git repository')) {
+                        reject(new Error('not a git repository'));
+                        return;
+                    }
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+
+                const staged = [];
+                const unstaged = [];
+                const untracked = [];
+
+                const entries = stdout.split('\0');
+                let i = 0;
+                while (i < entries.length) {
+                    const entry = entries[i];
+                    if (entry.length < 3) {
+                        i++;
+                        continue;
+                    }
+
+                    const x = entry[0];
+                    const y = entry[1];
+                    const filePath = entry.slice(3);
+
+                    if (x === '?' && y === '?') {
+                        untracked.push(filePath);
+                        i++;
+                        continue;
+                    }
+
+                    if (x === 'R' || x === 'C') {
+                        let newPath = '';
+                        if (i + 1 < entries.length) {
+                            newPath = entries[i + 1];
+                            i++;
+                        }
+                        staged.push({ path: newPath, status: x });
+                    } else if (x !== ' ' && x !== '?') {
+                        staged.push({ path: filePath, status: x });
+                    }
+
+                    if (y === 'R' || y === 'C') {
+                        let newPath = '';
+                        if (i + 1 < entries.length) {
+                            newPath = entries[i + 1];
+                            i++;
+                        }
+                        unstaged.push({ path: newPath, status: y });
+                    } else if (y !== ' ' && y !== '?') {
+                        unstaged.push({ path: filePath, status: y });
+                    }
+
+                    i++;
+                }
+
+                resolve({ staged, unstaged, untracked });
+            });
+        });
+    });
+
+    ipcMain.handle('git-diff', async (event, dirPath, file, staged) => {
+        return new Promise((resolve, reject) => {
+            const args = ['diff'];
+            if (staged) args.push('--cached');
+            if (file) args.push('--', file);
+
+            execFile('git', args, {
+                cwd: dirPath,
+                timeout: 30000,
+                maxBuffer: 10 * 1024 * 1024,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve(stdout);
+            });
+        });
+    });
+
+    ipcMain.handle('git-stage', async (event, dirPath, files) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['add', ...files], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve({ success: true });
+            });
+        });
+    });
+
+    ipcMain.handle('git-unstage', async (event, dirPath, files) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['reset', 'HEAD', '--', ...files], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve({ success: true });
+            });
+        });
+    });
+
+    ipcMain.handle('git-commit', async (event, dirPath, message) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['commit', '-m', message], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve({ output: stdout });
+            });
+        });
+    });
+
+    ipcMain.handle('git-push', async (event, dirPath) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['push'], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve({ output: stdout + stderr });
+            });
+        });
+    });
+
+    ipcMain.handle('git-pull', async (event, dirPath) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['pull'], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve({ output: stdout + stderr });
+            });
+        });
+    });
+
+    ipcMain.handle('git-branches', async (event, dirPath) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['branch', '--show-current'], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, currentOut) => {
+                if (err) {
+                    reject(new Error(err.message));
+                    return;
+                }
+                const current = currentOut.trim();
+
+                execFile('git', ['branch', '--list'], {
+                    cwd: dirPath,
+                    timeout: 30000,
+                }, (err2, listOut) => {
+                    if (err2) {
+                        reject(new Error(err2.message));
+                        return;
+                    }
+
+                    const branches = listOut.split('\n')
+                        .map(l => l.trim())
+                        .filter(l => l.length > 0)
+                        .map(l => l.replace(/^\*\s+/, ''));
+
+                    resolve({ branches, current });
+                });
+            });
+        });
+    });
+
+    ipcMain.handle('git-checkout', async (event, dirPath, branch) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['checkout', branch], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                resolve({ success: true });
+            });
+        });
+    });
+
+    ipcMain.handle('git-log', async (event, dirPath) => {
+        return new Promise((resolve, reject) => {
+            execFile('git', ['log', '--oneline', '-20'], {
+                cwd: dirPath,
+                timeout: 30000,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    if (stderr && (stderr.includes('does not have any commits') || stderr.includes('bad default revision'))) {
+                        resolve({ entries: [] });
+                        return;
+                    }
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+
+                const entries = stdout.split('\n')
+                    .map(l => l.trim())
+                    .filter(l => l.length > 0)
+                    .map(l => {
+                        const spaceIdx = l.indexOf(' ');
+                        if (spaceIdx < 0) return { hash: l, message: '' };
+                        return { hash: l.slice(0, spaceIdx), message: l.slice(spaceIdx + 1) };
+                    });
+
+                resolve({ entries });
+            });
+        });
+    });
+
     let watcher = null;
     ipcMain.handle('watch-directory', async (event, dirPath) => {
         if (watcher) {

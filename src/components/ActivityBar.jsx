@@ -4,7 +4,7 @@ import './ActivityBar.css';
 const PANELS = [
     { id: 'explorer', label: 'Explorer', icon: 'files' },
     { id: 'search', label: 'Search', icon: 'search' },
-    { id: 'git', label: 'Source Control', icon: 'git', disabled: true },
+    { id: 'git', label: 'Source Control', icon: 'git' },
 ];
 
 export default function ActivityBar({ activePanel, onPanelToggle }) {

@@ -6,6 +6,7 @@ import FolderPicker from './components/FolderPicker';
 import TabBar from './components/TabBar';
 import ActivityBar from './components/ActivityBar';
 import SearchPanel from './components/SearchPanel';
+import SourceControlPanel from './components/SourceControlPanel';
 import QuickOpen from './components/QuickOpen';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ToastProvider } from './components/Toast';
@@ -136,12 +137,7 @@ function AppContent() {
         <div className="side-panel">
           {activePanel === 'explorer' && <FileExplorer />}
           {activePanel === 'search' && <SearchPanel />}
-          {activePanel === 'git' && (
-            <div className="panel-placeholder">
-              <p>Source Control</p>
-              <p className="panel-placeholder-sub">Coming soon</p>
-            </div>
-          )}
+          {activePanel === 'git' && <SourceControlPanel />}
         </div>
       )}
       <div className="main-area">

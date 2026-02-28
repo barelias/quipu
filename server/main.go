@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -680,6 +682,449 @@ func handleFilesRecursive(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Git request types
+type GitFilesRequest struct {
+	Files []string `json:"files"`
+}
+
+type GitCommitRequest struct {
+	Message string `json:"message"`
+}
+
+type GitCheckoutRequest struct {
+	Branch string `json:"branch"`
+}
+
+// runGitCommand executes a git command in the workspace directory with a 30s timeout.
+// Returns stdout and stderr strings. If the command fails, returns an error.
+func runGitCommand(args ...string) (string, string, error) {
+	if workspaceRoot == "" {
+		return "", "", fmt.Errorf("no workspace open")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workspaceRoot
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// GET /git/status
+func handleGitStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	stdout, stderr, err := runGitCommand("status", "--porcelain", "-z")
+	if err != nil {
+		// Check if it's not a git repo
+		if strings.Contains(stderr, "not a git repository") {
+			jsonError(w, "not a git repository", http.StatusBadRequest)
+			return
+		}
+		jsonError(w, "git status failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	type FileStatus struct {
+		Path   string `json:"path"`
+		Status string `json:"status"`
+	}
+
+	staged := []FileStatus{}
+	unstaged := []FileStatus{}
+	untracked := []string{}
+
+	// Parse NUL-separated output from git status --porcelain -z
+	// Each entry: XY<space>path\0  (renamed entries: XY<space>old\0new\0)
+	entries := strings.Split(stdout, "\x00")
+	i := 0
+	for i < len(entries) {
+		entry := entries[i]
+		if len(entry) < 3 {
+			i++
+			continue
+		}
+
+		x := entry[0]   // staged status
+		y := entry[1]   // unstaged status
+		path := entry[3:] // skip "XY "
+
+		// Handle untracked files
+		if x == '?' && y == '?' {
+			untracked = append(untracked, path)
+			i++
+			continue
+		}
+
+		// Handle renames/copies - next entry is the new name
+		if x == 'R' || x == 'C' {
+			newPath := ""
+			if i+1 < len(entries) {
+				newPath = entries[i+1]
+				i++ // skip the extra entry
+			}
+			staged = append(staged, FileStatus{Path: newPath, Status: string(x)})
+		} else if x != ' ' && x != '?' {
+			staged = append(staged, FileStatus{Path: path, Status: string(x)})
+		}
+
+		if y == 'R' || y == 'C' {
+			newPath := ""
+			if i+1 < len(entries) {
+				newPath = entries[i+1]
+				i++
+			}
+			unstaged = append(unstaged, FileStatus{Path: newPath, Status: string(y)})
+		} else if y != ' ' && y != '?' {
+			unstaged = append(unstaged, FileStatus{Path: path, Status: string(y)})
+		}
+
+		i++
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"staged":    staged,
+		"unstaged":  unstaged,
+		"untracked": untracked,
+	})
+}
+
+// GET /git/diff?file=<path>&staged=true/false
+func handleGitDiff(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	file := r.URL.Query().Get("file")
+	isStaged := r.URL.Query().Get("staged") == "true"
+
+	args := []string{"diff"}
+	if isStaged {
+		args = append(args, "--cached")
+	}
+	if file != "" {
+		// Validate file path is within workspace
+		absFile := filepath.Join(workspaceRoot, file)
+		if !isWithinWorkspace(absFile) {
+			jsonError(w, "path outside workspace", http.StatusForbidden)
+			return
+		}
+		args = append(args, "--", file)
+	}
+
+	stdout, stderr, err := runGitCommand(args...)
+	if err != nil {
+		jsonError(w, "git diff failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(stdout))
+}
+
+// POST /git/stage  { files: [...] }
+func handleGitStage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	var req GitFilesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Files) == 0 {
+		jsonError(w, "no files specified", http.StatusBadRequest)
+		return
+	}
+
+	// Validate all file paths
+	for _, f := range req.Files {
+		absFile := filepath.Join(workspaceRoot, f)
+		if !isWithinWorkspace(absFile) {
+			jsonError(w, "path outside workspace: "+f, http.StatusForbidden)
+			return
+		}
+	}
+
+	args := append([]string{"add"}, req.Files...)
+	_, stderr, err := runGitCommand(args...)
+	if err != nil {
+		jsonError(w, "git add failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]bool{"success": true})
+}
+
+// POST /git/unstage  { files: [...] }
+func handleGitUnstage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	var req GitFilesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Files) == 0 {
+		jsonError(w, "no files specified", http.StatusBadRequest)
+		return
+	}
+
+	// Validate all file paths
+	for _, f := range req.Files {
+		absFile := filepath.Join(workspaceRoot, f)
+		if !isWithinWorkspace(absFile) {
+			jsonError(w, "path outside workspace: "+f, http.StatusForbidden)
+			return
+		}
+	}
+
+	args := append([]string{"reset", "HEAD", "--"}, req.Files...)
+	_, stderr, err := runGitCommand(args...)
+	if err != nil {
+		jsonError(w, "git reset failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]bool{"success": true})
+}
+
+// POST /git/commit  { message: "..." }
+func handleGitCommit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	var req GitCommitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Message == "" {
+		jsonError(w, "commit message required", http.StatusBadRequest)
+		return
+	}
+
+	stdout, stderr, err := runGitCommand("commit", "-m", req.Message)
+	if err != nil {
+		jsonError(w, "git commit failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"output": stdout})
+}
+
+// POST /git/push
+func handleGitPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	stdout, stderr, err := runGitCommand("push")
+	if err != nil {
+		jsonError(w, "git push failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"output": stdout + stderr})
+}
+
+// POST /git/pull
+func handleGitPull(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	stdout, stderr, err := runGitCommand("pull")
+	if err != nil {
+		jsonError(w, "git pull failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]string{"output": stdout + stderr})
+}
+
+// GET /git/branches
+func handleGitBranches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	// Get current branch
+	currentOut, stderr, err := runGitCommand("branch", "--show-current")
+	if err != nil {
+		jsonError(w, "git branch failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+	current := strings.TrimSpace(currentOut)
+
+	// Get all branches
+	listOut, stderr, err := runGitCommand("branch", "--list")
+	if err != nil {
+		jsonError(w, "git branch --list failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	branches := []string{}
+	for _, line := range strings.Split(listOut, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Remove the "* " prefix from current branch
+		line = strings.TrimPrefix(line, "* ")
+		branches = append(branches, line)
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"branches": branches,
+		"current":  current,
+	})
+}
+
+// POST /git/checkout  { branch: "..." }
+func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	var req GitCheckoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Branch == "" {
+		jsonError(w, "branch name required", http.StatusBadRequest)
+		return
+	}
+
+	_, stderr, err := runGitCommand("checkout", req.Branch)
+	if err != nil {
+		jsonError(w, "git checkout failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]bool{"success": true})
+}
+
+// GET /git/log
+func handleGitLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if workspaceRoot == "" {
+		jsonError(w, "no workspace open", http.StatusBadRequest)
+		return
+	}
+
+	stdout, stderr, err := runGitCommand("log", "--oneline", "-20")
+	if err != nil {
+		// Empty repo with no commits
+		if strings.Contains(stderr, "does not have any commits") || strings.Contains(stderr, "bad default revision") {
+			jsonResponse(w, map[string]interface{}{"entries": []interface{}{}})
+			return
+		}
+		jsonError(w, "git log failed: "+stderr, http.StatusInternalServerError)
+		return
+	}
+
+	type LogEntry struct {
+		Hash    string `json:"hash"`
+		Message string `json:"message"`
+	}
+
+	entries := []LogEntry{}
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: <hash> <message>
+		spaceIdx := strings.Index(line, " ")
+		if spaceIdx < 0 {
+			entries = append(entries, LogEntry{Hash: line, Message: ""})
+			continue
+		}
+		entries = append(entries, LogEntry{
+			Hash:    line[:spaceIdx],
+			Message: line[spaceIdx+1:],
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{"entries": entries})
+}
+
 func main() {
 	var addr = flag.String("addr", "localhost:3000", "http service address")
 	var workspace = flag.String("workspace", "", "workspace root directory (auto-detected from first /files request if not set)")
@@ -722,6 +1167,18 @@ func main() {
 	// Search endpoints
 	http.HandleFunc("/search", corsMiddleware(handleSearch))
 	http.HandleFunc("/files-recursive", corsMiddleware(handleFilesRecursive))
+
+	// Git endpoints
+	http.HandleFunc("/git/status", corsMiddleware(handleGitStatus))
+	http.HandleFunc("/git/diff", corsMiddleware(handleGitDiff))
+	http.HandleFunc("/git/stage", corsMiddleware(handleGitStage))
+	http.HandleFunc("/git/unstage", corsMiddleware(handleGitUnstage))
+	http.HandleFunc("/git/commit", corsMiddleware(handleGitCommit))
+	http.HandleFunc("/git/push", corsMiddleware(handleGitPush))
+	http.HandleFunc("/git/pull", corsMiddleware(handleGitPull))
+	http.HandleFunc("/git/branches", corsMiddleware(handleGitBranches))
+	http.HandleFunc("/git/checkout", corsMiddleware(handleGitCheckout))
+	http.HandleFunc("/git/log", corsMiddleware(handleGitLog))
 
 	// Terminal endpoint
 	http.HandleFunc("/term", handleTerminal)
