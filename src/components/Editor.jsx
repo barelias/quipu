@@ -3,7 +3,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
-import { marked } from 'marked';
+import { Markdown } from 'tiptap-markdown';
 import './Editor.css';
 
 const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
@@ -27,10 +27,25 @@ const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
             Placeholder.configure({
                 placeholder: 'Start writing...',
             }),
+            Markdown.configure({
+                html: false,
+                tightLists: true,
+                bulletListMarker: '-',
+                transformPastedText: true,
+                transformCopiedText: true,
+            }),
             Highlight.configure({
                 multicolor: true,
             }).extend({
                 name: 'comment',
+                addStorage() {
+                    return {
+                        markdown: {
+                            serialize: { open: '', close: '' },
+                            parse: {}
+                        }
+                    };
+                },
                 addAttributes() {
                     return {
                         comment: {
@@ -115,9 +130,8 @@ const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
             const isMarkdown = activeFile.name.endsWith('.md') || activeFile.name.endsWith('.markdown');
 
             if (isMarkdown) {
-                // Convert markdown to HTML, then let TipTap parse it
-                const html = marked.parse(text);
-                editor.commands.setContent(html);
+                // tiptap-markdown extension handles parsing raw markdown
+                editor.commands.setContent(text);
             } else {
                 // Plain text - convert to paragraphs
                 const paragraphs = text.split('\n').map(line => ({

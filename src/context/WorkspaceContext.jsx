@@ -120,7 +120,11 @@ export function WorkspaceProvider({ children }) {
         },
       }, null, 2);
     } else {
-      content = editorInstance.getText();
+      if (activeFile.name.endsWith('.md') || activeFile.name.endsWith('.markdown')) {
+        content = editorInstance.storage.markdown.getMarkdown();
+      } else {
+        content = editorInstance.getText();
+      }
     }
 
     try {
