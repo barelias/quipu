@@ -119,7 +119,7 @@ const Editor = ({ onEditorReady, onContentChange, activeFile, activeTabId, activ
         if (!editor) return;
         if (!activeFile || !activeTabId) {
             loadedTabRef.current = null;
-            editor.commands.setContent('');
+            editor.commands.setContent('', { emitUpdate: false });
             return;
         }
         if (loadedTabRef.current === activeTabId) return;
@@ -133,7 +133,7 @@ const Editor = ({ onEditorReady, onContentChange, activeFile, activeTabId, activ
 
         // If tab has a tiptapJSON snapshot, use it (returning to a previously viewed tab)
         if (activeTab && activeTab.tiptapJSON) {
-            editor.commands.setContent(activeTab.tiptapJSON);
+            editor.commands.setContent(activeTab.tiptapJSON, { emitUpdate: false });
             extractComments(editor);
             return;
         }
@@ -141,14 +141,14 @@ const Editor = ({ onEditorReady, onContentChange, activeFile, activeTabId, activ
         // Otherwise load from file content (first time opening this tab)
         if (activeFile.isQuipu && typeof activeFile.content === 'object') {
             // Quipu format - load TipTap JSON directly
-            editor.commands.setContent(activeFile.content);
+            editor.commands.setContent(activeFile.content, { emitUpdate: false });
         } else {
             const text = typeof activeFile.content === 'string' ? activeFile.content : '';
             const isMarkdown = activeFile.name.endsWith('.md') || activeFile.name.endsWith('.markdown');
 
             if (isMarkdown) {
                 // tiptap-markdown extension handles parsing raw markdown
-                editor.commands.setContent(text);
+                editor.commands.setContent(text, { emitUpdate: false });
             } else {
                 // Plain text - convert to paragraphs
                 const paragraphs = text.split('\n').map(line => ({
@@ -158,7 +158,7 @@ const Editor = ({ onEditorReady, onContentChange, activeFile, activeTabId, activ
                 editor.commands.setContent({
                     type: 'doc',
                     content: paragraphs.length > 0 ? paragraphs : [{ type: 'paragraph' }],
-                });
+                }, { emitUpdate: false });
             }
         }
         extractComments(editor);
