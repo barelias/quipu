@@ -3,6 +3,7 @@ import Editor from './components/Editor';
 import Terminal from './components/Terminal';
 import FileExplorer from './components/FileExplorer';
 import FolderPicker from './components/FolderPicker';
+import TabBar from './components/TabBar';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ToastProvider } from './components/Toast';
 import './App.css';
@@ -10,7 +11,10 @@ import './App.css';
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState(null);
   const terminalRef = React.useRef(null);
-  const { activeFile, isDirty, saveFile, setIsDirty, showFolderPicker, selectFolder, cancelFolderPicker } = useWorkspace();
+  const {
+    activeFile, isDirty, saveFile, setIsDirty, showFolderPicker, selectFolder, cancelFolderPicker,
+    activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
+  } = useWorkspace();
   const [sidebarVisible, setSidebarVisible] = useState(true);
 
   // Keyboard shortcuts
@@ -26,10 +30,29 @@ function AppContent() {
         e.preventDefault();
         setSidebarVisible(prev => !prev);
       }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
+        e.preventDefault();
+        if (activeTabId) {
+          closeTab(activeTabId);
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
+        e.preventDefault();
+        if (openTabs.length > 1) {
+          const currentIdx = openTabs.findIndex(t => t.id === activeTabId);
+          let nextIdx;
+          if (e.shiftKey) {
+            nextIdx = (currentIdx - 1 + openTabs.length) % openTabs.length;
+          } else {
+            nextIdx = (currentIdx + 1) % openTabs.length;
+          }
+          switchTab(openTabs[nextIdx].id);
+        }
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [editorInstance, activeFile, saveFile]);
+  }, [editorInstance, activeFile, saveFile, activeTabId, openTabs, closeTab, switchTab]);
 
   const handleSendToTerminal = () => {
     if (!editorInstance) return;
@@ -114,10 +137,14 @@ function AppContent() {
               <button className="send-btn" onClick={handleSendToTerminal}>Send to Terminal</button>
             </div>
           </div>
+          <TabBar />
           <Editor
             onEditorReady={handleEditorReady}
             onContentChange={handleContentChange}
             activeFile={activeFile}
+            activeTabId={activeTabId}
+            activeTab={activeTab}
+            snapshotTab={snapshotTab}
           />
         </div>
         <div className="terminal-pane">

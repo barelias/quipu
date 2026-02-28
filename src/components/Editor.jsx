@@ -6,7 +6,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from 'tiptap-markdown';
 import './Editor.css';
 
-const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
+const Editor = ({ onEditorReady, onContentChange, activeFile, activeTabId, activeTab, snapshotTab }) => {
     const [commentText, setCommentText] = useState('');
     const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
     const [showMenu, setShowMenu] = useState(false);
@@ -16,7 +16,7 @@ const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
     const menuRef = useRef(null);
     const pageRef = useRef(null);
     const commentsRef = useRef({});
-    const loadedFileRef = useRef(null);
+    const loadedTabRef = useRef(null);
 
     // New state for adjusted positions
     const [adjustedPositions, setAdjustedPositions] = useState({});
@@ -114,14 +114,31 @@ const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
         }
     }, [editor, onEditorReady]);
 
-    // Load file content when activeFile changes
+    // Load content when active tab changes
     useEffect(() => {
         if (!editor) return;
-        if (!activeFile) return;
-        // Avoid reloading the same file
-        if (loadedFileRef.current === activeFile.path) return;
-        loadedFileRef.current = activeFile.path;
+        if (!activeFile || !activeTabId) {
+            loadedTabRef.current = null;
+            editor.commands.setContent('');
+            return;
+        }
+        if (loadedTabRef.current === activeTabId) return;
 
+        // Snapshot previous tab before switching
+        if (loadedTabRef.current && snapshotTab) {
+            snapshotTab(loadedTabRef.current, editor.getJSON(), 0);
+        }
+
+        loadedTabRef.current = activeTabId;
+
+        // If tab has a tiptapJSON snapshot, use it (returning to a previously viewed tab)
+        if (activeTab && activeTab.tiptapJSON) {
+            editor.commands.setContent(activeTab.tiptapJSON);
+            extractComments(editor);
+            return;
+        }
+
+        // Otherwise load from file content (first time opening this tab)
         if (activeFile.isQuipu && typeof activeFile.content === 'object') {
             // Quipu format - load TipTap JSON directly
             editor.commands.setContent(activeFile.content);
@@ -145,7 +162,7 @@ const Editor = ({ onEditorReady, onContentChange, activeFile }) => {
             }
         }
         extractComments(editor);
-    }, [editor, activeFile]);
+    }, [editor, activeFile, activeTabId, activeTab, snapshotTab]);
 
     // Effect to calculate positions preventing overlap
     useEffect(() => {
