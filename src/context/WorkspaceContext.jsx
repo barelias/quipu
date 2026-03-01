@@ -18,6 +18,11 @@ export function WorkspaceProvider({ children }) {
   const [activeTabId, setActiveTabId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [gitChangeCount, setGitChangeCount] = useState(0);
+
+  const updateGitChangeCount = useCallback((count) => {
+    setGitChangeCount(count);
+  }, []);
 
   // Derived values (computed, not useState)
   const activeTab = openTabs.find(t => t.id === activeTabId) || null;
@@ -449,6 +454,9 @@ export function WorkspaceProvider({ children }) {
     closeOtherTabs,
     setTabDirty,
     snapshotTab,
+    // Git status
+    gitChangeCount,
+    updateGitChangeCount,
     // Frontmatter functions
     updateFrontmatter,
     addFrontmatterProperty,
