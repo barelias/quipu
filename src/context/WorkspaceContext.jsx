@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import jsYaml from 'js-yaml';
 import fs from '../services/fileSystem';
+import claudeInstaller from '../services/claudeInstaller';
 import { useToast } from '../components/Toast';
 
 const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -52,6 +53,11 @@ export function WorkspaceProvider({ children }) {
       console.error('Failed to read directory:', err);
       showToast('Failed to read directory: ' + err.message, 'error');
     }
+
+    // Auto-install FRAME skills for Claude Code (fire-and-forget)
+    claudeInstaller.installFrameSkills(folderPath).catch((err) => {
+      console.warn('Claude skills install failed:', err);
+    });
   }, [showToast]);
 
   const cancelFolderPicker = useCallback(() => {

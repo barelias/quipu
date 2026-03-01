@@ -5,12 +5,44 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
+import { Table } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableCell } from '@tiptap/extension-table-cell';
 import { Markdown } from 'tiptap-markdown';
 import { RevealMarkdown } from '../extensions/RevealMarkdown';
 import FrontmatterProperties from './FrontmatterProperties';
+import frameService from '../services/frameService.js';
+
+// Map an editor position to a 1-based line number (top-level block index)
+const posToLineNumber = (doc, pos) => {
+    let line = 0;
+    let offset = 0;
+    for (let i = 0; i < doc.childCount; i++) {
+        line++;
+        offset += doc.child(i).nodeSize;
+        if (offset >= pos) break;
+    }
+    return Math.max(1, line);
+};
+
+// Map a 1-based line number to the start position inside that block
+const lineNumberToPos = (doc, lineNumber) => {
+    let line = 0;
+    let pos = 0;
+    for (let i = 0; i < doc.childCount; i++) {
+        line++;
+        if (line === lineNumber) {
+            return pos + 1; // +1 to enter the node content
+        }
+        pos += doc.child(i).nodeSize;
+    }
+    return doc.content.size;
+};
 
 const Editor = ({
     onEditorReady, onContentChange, activeFile, activeTabId, activeTab, snapshotTab,
+    workspacePath,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
 }) => {
@@ -31,6 +63,10 @@ const Editor = ({
     const editor = useEditor({
         extensions: [
             StarterKit,
+            Table.configure({ resizable: false }),
+            TableRow,
+            TableHeader,
+            TableCell,
             Placeholder.configure({
                 placeholder: 'Start writing...',
             }),
@@ -172,6 +208,72 @@ const Editor = ({
         extractComments(editor);
     }, [editor, activeFile, activeTabId, activeTab, snapshotTab]);
 
+    // Load FRAME annotations as comment marks when switching tabs
+    useEffect(() => {
+        if (!editor || !activeFile?.path || !workspacePath || !activeTabId) return;
+
+        // Skip quipu files — they store comments inline in TipTap JSON
+        if (activeFile.isQuipu) return;
+
+        let cancelled = false;
+
+        const loadFrameAnnotations = async () => {
+            try {
+                const frame = await frameService.readFrame(workspacePath, activeFile.path);
+                if (cancelled || !frame?.annotations?.length) return;
+
+                const { doc } = editor.state;
+                const { tr } = editor.state;
+                let applied = false;
+
+                // Collect existing comment IDs to avoid duplicates
+                const existingIds = new Set();
+                doc.descendants((node) => {
+                    if (node.marks) {
+                        const cm = node.marks.find((m) => m.type.name === 'comment');
+                        if (cm?.attrs.id) existingIds.add(cm.attrs.id);
+                    }
+                });
+
+                for (const annotation of frame.annotations) {
+                    if (existingIds.has(annotation.id)) continue;
+
+                    const pos = lineNumberToPos(doc, annotation.line);
+                    if (pos <= 0 || pos >= doc.content.size) continue;
+
+                    const $pos = doc.resolve(pos);
+                    const blockNode = $pos.parent;
+                    const blockStart = $pos.start();
+                    const blockEnd = blockStart + blockNode.content.size;
+
+                    if (blockEnd > blockStart) {
+                        const commentMark = editor.schema.marks.comment.create({
+                            comment: annotation.text,
+                            id: annotation.id,
+                        });
+                        tr.addMark(blockStart, blockEnd, commentMark);
+                        applied = true;
+                    }
+                }
+
+                if (applied && !cancelled) {
+                    editor.view.dispatch(tr);
+                    extractComments(editor);
+                }
+            } catch (err) {
+                console.warn('Failed to load FRAME annotations:', err);
+            }
+        };
+
+        // Delay to ensure editor content is settled after tab switch
+        const timer = setTimeout(loadFrameAnnotations, 100);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [activeTabId, editor, workspacePath, activeFile?.path, activeFile?.isQuipu]);
+
     // Effect to calculate positions preventing overlap
     useEffect(() => {
         const newPositions = {};
@@ -302,10 +404,28 @@ const Editor = ({
     const addComment = () => {
         if (editor && commentText) {
             const commentId = crypto.randomUUID();
+
+            // Compute line number before applying mark
+            const { from } = editor.state.selection;
+            const lineNumber = posToLineNumber(editor.state.doc, from);
+
             editor.chain().focus().setMark('comment', { comment: commentText, id: commentId }).run();
             setCommentText('');
             setShowCommentInput(false);
             extractComments(editor);
+
+            // Sync to FRAME (fire-and-forget)
+            if (workspacePath && activeFile?.path) {
+                frameService.addAnnotation(workspacePath, activeFile.path, {
+                    id: commentId,
+                    line: lineNumber,
+                    text: commentText,
+                    type: 'review',
+                    author: 'user',
+                }).catch((err) => {
+                    console.warn('Failed to sync comment to FRAME:', err);
+                });
+            }
 
             // Generate and log prompt
             const prompt = generatePrompt(editor);
@@ -335,6 +455,13 @@ const Editor = ({
 
         editor.view.dispatch(tr);
         extractComments(editor);
+
+        // Remove from FRAME (fire-and-forget)
+        if (workspacePath && activeFile?.path) {
+            frameService.removeAnnotation(workspacePath, activeFile.path, commentId).catch((err) => {
+                console.warn('Failed to remove FRAME annotation:', err);
+            });
+        }
     };
 
     return (
@@ -348,7 +475,7 @@ const Editor = ({
             )}>
                 <div
                     className={cn(
-                        "w-[816px] min-h-[1056px] bg-white rounded border border-page-border",
+                        "w-[816px] min-h-[1056px] bg-page-bg rounded border border-page-border",
                         "shadow-[0_1px_3px_rgba(0,0,0,0.08),0_4px_12px_rgba(0,0,0,0.06),0_12px_30px_rgba(0,0,0,0.05)]",
                         "p-16 relative shrink-0 transition-[width] duration-300",
                         "max-[1150px]:w-full max-[1150px]:max-w-[816px]",
@@ -428,7 +555,7 @@ const Editor = ({
                 )}>
                     {showCommentInput && (
                         <div
-                            className="absolute w-[280px] bg-white rounded-lg shadow-lg p-3 pointer-events-auto border border-accent z-[100]"
+                            className="absolute w-[280px] bg-bg-surface rounded-lg shadow-lg p-3 pointer-events-auto border border-accent z-[100]"
                             style={{ top: commentInputTop }}
                         >
                             <textarea
@@ -441,7 +568,7 @@ const Editor = ({
                             <div className="flex justify-end gap-2">
                                 <button
                                     onClick={cancelComment}
-                                    className="py-1.5 px-3 rounded text-[13px] font-medium cursor-pointer border-none bg-transparent text-text-tertiary hover:bg-black/5"
+                                    className="py-1.5 px-3 rounded text-[13px] font-medium cursor-pointer border-none bg-transparent text-text-tertiary hover:bg-bg-elevated"
                                 >
                                     Cancel
                                 </button>
@@ -459,7 +586,7 @@ const Editor = ({
                         <div
                             key={c.id || i}
                             ref={el => commentsRef.current[i] = el}
-                            className="absolute w-[280px] bg-white rounded-lg shadow-md p-3 pointer-events-auto border border-transparent hover:shadow-lg"
+                            className="absolute w-[280px] bg-bg-surface rounded-lg shadow-md p-3 pointer-events-auto border border-transparent hover:shadow-lg"
                             style={{
                                 top: adjustedPositions[i] !== undefined ? adjustedPositions[i] : c.top,
                                 transition: 'top 0.3s ease-out'
@@ -468,9 +595,9 @@ const Editor = ({
                             <div className="flex justify-between mb-1 text-xs">
                                 <span className="font-semibold text-page-text">User</span>
                                 <div className="flex gap-2 items-center">
-                                    <span className="text-[#57606a]">Just now</span>
+                                    <span className="text-text-secondary">Just now</span>
                                     <button
-                                        className="border-none bg-transparent text-[#57606a] cursor-pointer py-0.5 px-1.5 rounded flex items-center justify-center transition-colors hover:bg-[#e5e7eb] hover:text-page-text"
+                                        className="border-none bg-transparent text-text-secondary cursor-pointer py-0.5 px-1.5 rounded flex items-center justify-center transition-colors hover:bg-bg-elevated hover:text-page-text"
                                         onClick={() => resolveComment(c.id)}
                                         title="Resolve comment"
                                     >
@@ -479,7 +606,7 @@ const Editor = ({
                                 </div>
                             </div>
                             <div className="text-sm text-page-text mb-2 whitespace-pre-wrap">{c.comment}</div>
-                            <div className="text-xs text-[#57606a] border-l-2 border-warning pl-2 italic whitespace-nowrap overflow-hidden text-ellipsis">"{c.text}"</div>
+                            <div className="text-xs text-text-secondary border-l-2 border-warning pl-2 italic whitespace-nowrap overflow-hidden text-ellipsis">"{c.text}"</div>
                         </div>
                     ))}
                 </div>
