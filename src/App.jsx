@@ -11,6 +11,7 @@ import TabBar from './components/TabBar';
 import ActivityBar from './components/ActivityBar';
 import SearchPanel from './components/SearchPanel';
 import SourceControlPanel from './components/SourceControlPanel';
+import DiffViewer from './components/DiffViewer';
 import QuickOpen from './components/QuickOpen';
 import TitleBar from './components/TitleBar';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
@@ -32,11 +33,25 @@ function AppContent() {
   const [isQuickOpenVisible, setIsQuickOpenVisible] = useState(false);
   const [quickOpenInitialValue, setQuickOpenInitialValue] = useState('');
   const [isClaudeRunning, setIsClaudeRunning] = useState(false);
+  const [activeDiff, setActiveDiff] = useState(null); // { filePath, diffText, isStaged }
 
   // Reset Claude running state when workspace changes (terminal restarts)
   useEffect(() => {
     setIsClaudeRunning(false);
   }, [workspacePath]);
+
+  // Clear diff view when user switches to a different tab
+  useEffect(() => {
+    setActiveDiff(null);
+  }, [activeTabId]);
+
+  const handleOpenDiff = useCallback((filePath, diffText, isStaged) => {
+    if (filePath === null) {
+      setActiveDiff(null);
+      return;
+    }
+    setActiveDiff({ filePath, diffText, isStaged });
+  }, []);
 
   const sidePanelRef = usePanelRef();
   const terminalPanelRef = usePanelRef();
@@ -356,7 +371,7 @@ function AppContent() {
           <div className="h-full overflow-hidden flex flex-col bg-bg-surface">
             {activePanel === 'explorer' && <FileExplorer />}
             {activePanel === 'search' && <SearchPanel activePanel={activePanel} />}
-            {activePanel === 'git' && <SourceControlPanel />}
+            {activePanel === 'git' && <SourceControlPanel onOpenDiff={handleOpenDiff} />}
           </div>
         </Panel>
         <Separator className="shrink-0 w-0 cursor-col-resize bg-transparent" style={{ WebkitAppRegion: 'no-drag' }} />
@@ -365,7 +380,14 @@ function AppContent() {
             <Panel minSize={100}>
               <div className="h-full flex flex-col overflow-hidden relative">
                 <TabBar />
-                {activeFile ? (
+                {activeDiff ? (
+                  <DiffViewer
+                    filePath={activeDiff.filePath}
+                    diffText={activeDiff.diffText}
+                    isStaged={activeDiff.isStaged}
+                    onClose={() => setActiveDiff(null)}
+                  />
+                ) : activeFile ? (
                   activeTab?.isMedia ? (
                     <MediaViewer filePath={activeTab.path} fileName={activeTab.name} />
                   ) : isCodeFile(activeFile.name) && !activeFile.isQuipu ? (

@@ -38,71 +38,7 @@ const STATUS_COLORS = {
   U: 'text-[#9b6bc7] bg-[#9b6bc7]/10',
 };
 
-function parseDiff(diffText) {
-  if (!diffText) return [];
-  const lines = diffText.split('\n');
-  const result = [];
-  let oldLine = 0, newLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith('@@')) {
-      const match = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
-      if (match) {
-        oldLine = parseInt(match[1]) - 1;
-        newLine = parseInt(match[2]) - 1;
-      }
-      result.push({ type: 'header', text: line });
-    } else if (line.startsWith('+') && !line.startsWith('+++')) {
-      newLine++;
-      result.push({ type: 'add', text: line.slice(1), newLine });
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
-      oldLine++;
-      result.push({ type: 'remove', text: line.slice(1), oldLine });
-    } else if (!line.startsWith('diff') && !line.startsWith('index') && !line.startsWith('---') && !line.startsWith('+++')) {
-      oldLine++;
-      newLine++;
-      result.push({ type: 'context', text: line.startsWith(' ') ? line.slice(1) : line, oldLine, newLine });
-    }
-  }
-  return result;
-}
-
-const DiffView = ({ diffText }) => {
-  const lines = parseDiff(diffText);
-  if (lines.length === 0) {
-    return (
-      <div className="bg-bg-base border-t border-border py-2 px-3.5 text-xs text-text-primary opacity-50 italic">
-        No diff available
-      </div>
-    );
-  }
-  return (
-    <div className="bg-bg-base border-t border-border max-h-[300px] overflow-auto font-mono text-[11px] leading-[18px]">
-      {lines.map((line, idx) => (
-        <div
-          key={idx}
-          className={cn(
-            "flex px-2 whitespace-pre",
-            line.type === 'add' && "bg-git-added/10 text-git-added",
-            line.type === 'remove' && "bg-git-deleted/10 text-git-deleted",
-            line.type === 'header' && "bg-white/[0.03] text-accent font-semibold py-0.5",
-            line.type === 'context' && "text-text-secondary",
-          )}
-        >
-          <span className="w-8 text-right pr-2 shrink-0 opacity-50 select-none">
-            {line.oldLine || ''}
-          </span>
-          <span className="w-8 text-right pr-2 shrink-0 opacity-50 select-none">
-            {line.newLine || ''}
-          </span>
-          <span className="flex-1 min-w-0">{line.text}</span>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-function SourceControlPanel() {
+function SourceControlPanel({ onOpenDiff }) {
   const { workspacePath } = useWorkspace();
   const { showToast } = useToast();
 
@@ -120,7 +56,7 @@ function SourceControlPanel() {
   const [isPushing, setIsPushing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
-  const [expandedDiff, setExpandedDiff] = useState(null);
+  const [selectedDiff, setSelectedDiff] = useState(null); // { path, staged }
 
   const branchDropdownRef = useRef(null);
   const pollTimerRef = useRef(null);
@@ -309,18 +245,20 @@ function SourceControlPanel() {
   const handleFileClick = useCallback(async (filePath, isStaged = false) => {
     if (!workspacePath) return;
 
-    if (expandedDiff?.path === filePath && expandedDiff?.staged === isStaged) {
-      setExpandedDiff(null);
+    if (selectedDiff?.path === filePath && selectedDiff?.staged === isStaged) {
+      setSelectedDiff(null);
+      onOpenDiff?.(null);
       return;
     }
 
     try {
       const diffText = await gitService.diff(workspacePath, filePath, isStaged);
-      setExpandedDiff({ path: filePath, diff: diffText, staged: isStaged });
+      setSelectedDiff({ path: filePath, staged: isStaged });
+      onOpenDiff?.(filePath, diffText, isStaged);
     } catch (err) {
       showToast('Failed to load diff: ' + err.message, 'error');
     }
-  }, [workspacePath, expandedDiff, showToast]);
+  }, [workspacePath, selectedDiff, onOpenDiff, showToast]);
 
   const handleCommitKeyDown = useCallback((e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -465,28 +403,27 @@ function SourceControlPanel() {
             </div>
             <div>
               {staged.map((file, idx) => (
-                <React.Fragment key={`staged-${file.path}-${idx}`}>
-                  <div
-                    className="group flex items-center h-6 pr-2.5 pl-3.5 cursor-pointer gap-1.5 hover:bg-white/[0.06]"
-                    onClick={() => handleFileClick(file.path, true)}
-                    title={`${file.path} [${STATUS_LABELS[file.status] || file.status}]`}
-                  >
-                    <span className={cn("shrink-0 w-4 h-4 inline-flex items-center justify-center text-[10px] font-bold font-mono rounded-sm", STATUS_COLORS[file.status] || 'text-text-tertiary bg-white/[0.06]')}>
-                      {STATUS_LETTERS[file.status] || file.status}
-                    </span>
-                    <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 min-w-0">{file.path}</span>
-                    <button
-                      className="shrink-0 bg-transparent border border-transparent rounded-sm px-1 text-text-primary opacity-0 cursor-pointer leading-none group-hover:opacity-60 hover:!opacity-100 hover:bg-white/[0.08] hover:border-border"
-                      onClick={(e) => { e.stopPropagation(); handleUnstageFile(file.path); }}
-                      title="Unstage"
-                    >
-                      <MinusIcon size={14} />
-                    </button>
-                  </div>
-                  {expandedDiff?.path === file.path && expandedDiff?.staged === true && (
-                    <DiffView diffText={expandedDiff.diff} />
+                <div
+                  key={`staged-${file.path}-${idx}`}
+                  className={cn(
+                    "group flex items-center h-6 pr-2.5 pl-3.5 cursor-pointer gap-1.5 hover:bg-white/[0.06]",
+                    selectedDiff?.path === file.path && selectedDiff?.staged === true && "bg-white/[0.08]",
                   )}
-                </React.Fragment>
+                  onClick={() => handleFileClick(file.path, true)}
+                  title={`${file.path} [${STATUS_LABELS[file.status] || file.status}]`}
+                >
+                  <span className={cn("shrink-0 w-4 h-4 inline-flex items-center justify-center text-[10px] font-bold font-mono rounded-sm", STATUS_COLORS[file.status] || 'text-text-tertiary bg-white/[0.06]')}>
+                    {STATUS_LETTERS[file.status] || file.status}
+                  </span>
+                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 min-w-0">{file.path}</span>
+                  <button
+                    className="shrink-0 bg-transparent border border-transparent rounded-sm px-1 text-text-primary opacity-0 cursor-pointer leading-none group-hover:opacity-60 hover:!opacity-100 hover:bg-white/[0.08] hover:border-border"
+                    onClick={(e) => { e.stopPropagation(); handleUnstageFile(file.path); }}
+                    title="Unstage"
+                  >
+                    <MinusIcon size={14} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -508,28 +445,27 @@ function SourceControlPanel() {
             </div>
             <div>
               {unstaged.map((file, idx) => (
-                <React.Fragment key={`unstaged-${file.path}-${idx}`}>
-                  <div
-                    className="group flex items-center h-6 pr-2.5 pl-3.5 cursor-pointer gap-1.5 hover:bg-white/[0.06]"
-                    onClick={() => handleFileClick(file.path, false)}
-                    title={`${file.path} [${STATUS_LABELS[file.status] || file.status}]`}
-                  >
-                    <span className={cn("shrink-0 w-4 h-4 inline-flex items-center justify-center text-[10px] font-bold font-mono rounded-sm", STATUS_COLORS[file.status] || 'text-text-tertiary bg-white/[0.06]')}>
-                      {STATUS_LETTERS[file.status] || file.status}
-                    </span>
-                    <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 min-w-0">{file.path}</span>
-                    <button
-                      className="shrink-0 bg-transparent border border-transparent rounded-sm px-1 text-text-primary opacity-0 cursor-pointer leading-none group-hover:opacity-60 hover:!opacity-100 hover:bg-white/[0.08] hover:border-border"
-                      onClick={(e) => { e.stopPropagation(); handleStageFile(file.path); }}
-                      title="Stage"
-                    >
-                      <PlusIcon size={14} />
-                    </button>
-                  </div>
-                  {expandedDiff?.path === file.path && expandedDiff?.staged === false && (
-                    <DiffView diffText={expandedDiff.diff} />
+                <div
+                  key={`unstaged-${file.path}-${idx}`}
+                  className={cn(
+                    "group flex items-center h-6 pr-2.5 pl-3.5 cursor-pointer gap-1.5 hover:bg-white/[0.06]",
+                    selectedDiff?.path === file.path && selectedDiff?.staged === false && "bg-white/[0.08]",
                   )}
-                </React.Fragment>
+                  onClick={() => handleFileClick(file.path, false)}
+                  title={`${file.path} [${STATUS_LABELS[file.status] || file.status}]`}
+                >
+                  <span className={cn("shrink-0 w-4 h-4 inline-flex items-center justify-center text-[10px] font-bold font-mono rounded-sm", STATUS_COLORS[file.status] || 'text-text-tertiary bg-white/[0.06]')}>
+                    {STATUS_LETTERS[file.status] || file.status}
+                  </span>
+                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 min-w-0">{file.path}</span>
+                  <button
+                    className="shrink-0 bg-transparent border border-transparent rounded-sm px-1 text-text-primary opacity-0 cursor-pointer leading-none group-hover:opacity-60 hover:!opacity-100 hover:bg-white/[0.08] hover:border-border"
+                    onClick={(e) => { e.stopPropagation(); handleStageFile(file.path); }}
+                    title="Stage"
+                  >
+                    <PlusIcon size={14} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -551,26 +487,25 @@ function SourceControlPanel() {
             </div>
             <div>
               {untracked.map((filePath, idx) => (
-                <React.Fragment key={`untracked-${filePath}-${idx}`}>
-                  <div
-                    className="group flex items-center h-6 pr-2.5 pl-3.5 cursor-pointer gap-1.5 hover:bg-white/[0.06]"
-                    onClick={() => handleFileClick(filePath, false)}
-                    title={`${filePath} [Untracked]`}
-                  >
-                    <span className="shrink-0 w-4 h-4 inline-flex items-center justify-center text-[10px] font-bold font-mono rounded-sm text-git-untracked bg-white/[0.06]">U</span>
-                    <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 min-w-0">{filePath}</span>
-                    <button
-                      className="shrink-0 bg-transparent border border-transparent rounded-sm px-1 text-text-primary opacity-0 cursor-pointer leading-none group-hover:opacity-60 hover:!opacity-100 hover:bg-white/[0.08] hover:border-border"
-                      onClick={(e) => { e.stopPropagation(); handleStageFile(filePath); }}
-                      title="Stage"
-                    >
-                      <PlusIcon size={14} />
-                    </button>
-                  </div>
-                  {expandedDiff?.path === filePath && expandedDiff?.staged === false && (
-                    <DiffView diffText={expandedDiff.diff} />
+                <div
+                  key={`untracked-${filePath}-${idx}`}
+                  className={cn(
+                    "group flex items-center h-6 pr-2.5 pl-3.5 cursor-pointer gap-1.5 hover:bg-white/[0.06]",
+                    selectedDiff?.path === filePath && selectedDiff?.staged === false && "bg-white/[0.08]",
                   )}
-                </React.Fragment>
+                  onClick={() => handleFileClick(filePath, false)}
+                  title={`${filePath} [Untracked]`}
+                >
+                  <span className="shrink-0 w-4 h-4 inline-flex items-center justify-center text-[10px] font-bold font-mono rounded-sm text-git-untracked bg-white/[0.06]">U</span>
+                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 min-w-0">{filePath}</span>
+                  <button
+                    className="shrink-0 bg-transparent border border-transparent rounded-sm px-1 text-text-primary opacity-0 cursor-pointer leading-none group-hover:opacity-60 hover:!opacity-100 hover:bg-white/[0.08] hover:border-border"
+                    onClick={(e) => { e.stopPropagation(); handleStageFile(filePath); }}
+                    title="Stage"
+                  >
+                    <PlusIcon size={14} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
