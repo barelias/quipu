@@ -337,6 +337,7 @@ npm run build:release -- win  # Windows targets from WSL
 - [docs/plans/2026-02-28-feat-windows-build-wsl-remote-plan.md](../../plans/2026-02-28-feat-windows-build-wsl-remote-plan.md) — Master plan: thin-shell architecture, Go server bundling, WSL remote mode, dynamic port assignment
 - [docs/solutions/build-errors/electron-cross-platform-native-modules-wsl.md](../build-errors/electron-cross-platform-native-modules-wsl.md) — How to cross-compile from WSL, why `node-pty` was removed from the production build
 - [docs/solutions/ui-bugs/editor-font-command-palette-theme-toggle.md](../ui-bugs/editor-font-command-palette-theme-toggle.md) — Related localStorage persistence pattern for editor preferences
+- [docs/solutions/integration-issues/claude-terminal-workspace-sync.md](../integration-issues/claude-terminal-workspace-sync.md) — Terminal state synchronised with workspace context (companion storage consumer)
 
 ## Prevention Strategies
 
@@ -361,6 +362,41 @@ const STORAGE_KEYS = {
 ### Stale Recent Workspace Entries
 
 Users can delete folders outside the app. On auto-open failure, the app already shows a warning toast. A future improvement: validate all paths on startup and prune stale entries asynchronously.
+
+### IPC Handler / Preload Mismatch
+
+Adding a handler in `main.cjs` without a matching entry in `preload.cjs` (or vice versa) produces silent `undefined` returns — not thrown errors. Always update both files in the same commit. Name IPC channels with constants to catch typos at definition time:
+
+```javascript
+// shared-constants (top of main.cjs and preload.cjs)
+const IPC = { STORAGE_GET: 'storage-get', STORAGE_SET: 'storage-set' };
+```
+
+### Atomic Writes for quipu-state.json
+
+`fs.writeFileSync` is not atomic — a force-quit mid-write leaves a truncated file. The current implementation recovers gracefully (`readStorage` returns `{}`), but future versions that store critical state should write to a `.tmp` file and rename:
+
+```javascript
+const tmp = storageFile + '.tmp';
+fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+fs.renameSync(tmp, storageFile);  // atomic on most OS/filesystems
+```
+
+### localStorage Quota in Browser Mode
+
+Serialised workspace history (max 10 entries × ~200 bytes each) is well within the 5MB `localStorage` limit. However, if future keys are added, guard against `QuotaExceededError`:
+
+```javascript
+set: (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    if (e.name === 'QuotaExceededError') return Promise.resolve(); // degrade silently
+    return Promise.reject(e);
+  }
+  return Promise.resolve();
+},
+```
 
 ### Build Artifacts
 
@@ -390,5 +426,17 @@ After every `build:release`, verify:
 - [ ] NSIS installer allows custom directory selection
 - [ ] Portable `.exe` runs without installation
 - [ ] Double-clicking a `.quipu` file opens Quipu
-- [ ] Uninstall removes Start Menu and Desktop shortcuts
+- [ ] Right-click a `.quipu` file → "Open with Quipu" appears in context menu
+- [ ] Uninstall removes Start Menu and Desktop shortcuts and cleans up file associations
+- [ ] Reinstall after uninstall → file associations work without conflicts
 - [ ] Build completes from WSL: `npm run build:release -- win`
+
+### Thin Shell (`main-thin.cjs`)
+- [ ] Production build launches Electron → Go server spawned automatically, app loads within 3 s
+- [ ] Only one Go server process in Task Manager (no duplicate spawns on second window)
+- [ ] Kill Go server externally → Electron shows error state (does not silently hang)
+- [ ] Port 3000 pre-occupied → thin shell falls back to a free port, app still loads
+- [ ] Production build contains no `node-pty` (`grep -r "node-pty" dist/` returns empty)
+
+### Concurrent Writes
+- [ ] Open two Electron windows simultaneously, both open different workspaces → `quipu-state.json` contains both in correct LRU order, no corruption
