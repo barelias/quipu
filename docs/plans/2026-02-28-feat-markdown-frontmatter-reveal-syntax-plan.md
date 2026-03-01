@@ -1,7 +1,7 @@
 ---
 title: "Notion-style Frontmatter Properties & Typora-style Reveal Raw Markdown"
 type: feat
-status: active
+status: completed
 date: 2026-02-28
 ---
 
