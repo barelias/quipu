@@ -160,7 +160,7 @@ const Terminal = forwardRef(({ workspacePath }, ref) => {
       }
       term.dispose();
     };
-  }, []);
+  }, [workspacePath]);
 
   return (
     <div

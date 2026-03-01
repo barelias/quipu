@@ -44,6 +44,7 @@ async function readFrame(workspacePath, filePath) {
   const framePath = getFramePath(workspacePath, filePath);
   try {
     const content = await fs.readFile(framePath);
+    if (!content) return null;
     return JSON.parse(content);
   } catch {
     return null;
@@ -72,12 +73,12 @@ async function createFrame(workspacePath, filePath) {
   return writeFrame(workspacePath, filePath, frame);
 }
 
-async function addAnnotation(workspacePath, filePath, { line, text, type = 'review', author = 'user' }) {
+async function addAnnotation(workspacePath, filePath, { id, line, text, type = 'review', author = 'user' }) {
   let frame = await readFrame(workspacePath, filePath);
   if (!frame) frame = createEmptyFrame(filePath, workspacePath);
 
   frame.annotations.push({
-    id: generateId(),
+    id: id || generateId(),
     line,
     text,
     type,
@@ -85,6 +86,14 @@ async function addAnnotation(workspacePath, filePath, { line, text, type = 'revi
     timestamp: new Date().toISOString(),
   });
 
+  return writeFrame(workspacePath, filePath, frame);
+}
+
+async function removeAnnotation(workspacePath, filePath, annotationId) {
+  const frame = await readFrame(workspacePath, filePath);
+  if (!frame) return null;
+
+  frame.annotations = frame.annotations.filter((a) => a.id !== annotationId);
   return writeFrame(workspacePath, filePath, frame);
 }
 
@@ -116,6 +125,7 @@ const frameService = {
   writeFrame,
   createFrame,
   addAnnotation,
+  removeAnnotation,
   addHistoryEntry,
   updateInstructions,
 };

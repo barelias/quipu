@@ -84,7 +84,12 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('read-file', async (event, filePath) => {
-        return fs.promises.readFile(filePath, 'utf-8');
+        try {
+            return await fs.promises.readFile(filePath, 'utf-8');
+        } catch (err) {
+            if (err.code === 'ENOENT') return null;
+            throw err;
+        }
     });
 
     ipcMain.handle('write-file', async (event, filePath, content) => {

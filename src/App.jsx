@@ -358,6 +358,7 @@ function AppContent() {
                     activeTabId={activeTabId}
                     activeTab={activeTab}
                     snapshotTab={snapshotTab}
+                    workspacePath={workspacePath}
                     updateFrontmatter={updateFrontmatter}
                     addFrontmatterProperty={addFrontmatterProperty}
                     removeFrontmatterProperty={removeFrontmatterProperty}
