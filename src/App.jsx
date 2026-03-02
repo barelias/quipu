@@ -17,6 +17,7 @@ import TitleBar from './components/TitleBar';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ToastProvider, useToast } from './components/Toast';
 import frameService from './services/frameService.js';
+import claudeInstaller from './services/claudeInstaller';
 import { isCodeFile } from './utils/fileTypes';
 
 function AppContent() {
@@ -100,25 +101,48 @@ function AppContent() {
     localStorage.setItem('quipu-theme', next);
   }, []);
 
-  const handleSendToTerminal = useCallback(() => {
-    if (!editorInstance) return;
-
-    const text = editorInstance.getText();
-    if (!text.trim()) return;
-
-    if (terminalRef.current) {
-      terminalRef.current.focus();
-      if (isClaudeRunning) {
-        terminalRef.current.write(text + "\n");
-      } else {
-        terminalRef.current.write("claude\n");
-        setIsClaudeRunning(true);
-        setTimeout(() => {
-          terminalRef.current.write(text + "\n");
-        }, 2000);
-      }
+  const handleSendToTerminal = useCallback(async () => {
+    if (!activeFile || !workspacePath) {
+      showToast('No file open to send to Claude', 'warning');
+      return;
     }
-  }, [editorInstance, isClaudeRunning]);
+    if (!terminalRef.current) {
+      showToast('Terminal not connected', 'error');
+      return;
+    }
+
+    // Auto-save if dirty
+    if (editorInstance && activeTab?.isDirty) {
+      await saveFile(editorInstance);
+    }
+
+    // Ensure .claude skills/commands are installed in the workspace
+    try {
+      await claudeInstaller.installFrameSkills(workspacePath);
+    } catch {
+      // Non-blocking — proceed even if install fails
+    }
+
+    // Expand terminal if collapsed
+    if (terminalPanelRef.current?.isCollapsed()) {
+      terminalPanelRef.current.expand();
+    }
+
+    const relativePath = activeFile.path.replace(workspacePath + '/', '');
+    const command = `/frame ${relativePath}`;
+
+    terminalRef.current.focus();
+
+    if (isClaudeRunning) {
+      terminalRef.current.write(command + "\n");
+    } else {
+      terminalRef.current.write("claude\n");
+      setIsClaudeRunning(true);
+      setTimeout(() => {
+        terminalRef.current.write(command + "\n");
+      }, 2000);
+    }
+  }, [activeFile, workspacePath, editorInstance, activeTab, saveFile, terminalPanelRef, isClaudeRunning, showToast]);
 
   const handleSendToClaude = useCallback(async () => {
     if (!activeFile || !workspacePath) {

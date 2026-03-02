@@ -255,33 +255,33 @@ const FrontmatterProperties = ({
     }
   };
 
-  const headerBtn = (
-    <button
-      className="ml-auto text-[10px] font-mono text-page-text/40 hover:text-accent
-                 transition-colors cursor-pointer px-1"
-      onClick={(e) => {
-        e.stopPropagation();
-        isEditingRaw ? handleExitRaw() : handleEnterRaw();
-      }}
-      title={isEditingRaw ? 'Switch to structured view' : 'Edit raw YAML'}
+  const headerRow = (label) => (
+    <div
+      className="flex items-center gap-2 w-full px-4 py-2 text-xs font-mono
+                 text-page-text/60 bg-page-bg border-b border-page-border"
     >
-      {isEditingRaw ? 'Structured' : 'Edit Raw'}
-    </button>
+      <CollapsibleTrigger
+        className="flex items-center gap-2 hover:text-page-text/80 cursor-pointer"
+      >
+        {isCollapsed ? <CaretRight size={12} /> : <CaretDown size={12} />}
+        <span>{label}</span>
+      </CollapsibleTrigger>
+      <button
+        className="ml-auto text-[10px] font-mono text-page-text/40 hover:text-accent
+                   transition-colors cursor-pointer px-1"
+        onClick={() => isEditingRaw ? handleExitRaw() : handleEnterRaw()}
+        title={isEditingRaw ? 'Switch to structured view' : 'Edit raw YAML'}
+      >
+        {isEditingRaw ? 'Structured' : 'Edit Raw'}
+      </button>
+    </div>
   );
 
   // Malformed YAML fallback
   if (frontmatterRaw && !frontmatter) {
     return (
       <Collapsible open={!isCollapsed} onOpenChange={() => onToggleCollapse(tabId)}>
-        <CollapsibleTrigger
-          className="flex items-center gap-2 w-full px-4 py-2 text-xs font-mono
-                     text-page-text/60 bg-page-bg border-b border-page-border
-                     hover:text-page-text/80 cursor-pointer"
-        >
-          {isCollapsed ? <CaretRight size={12} /> : <CaretDown size={12} />}
-          <span>Properties (malformed YAML)</span>
-          {headerBtn}
-        </CollapsibleTrigger>
+        {headerRow('Properties (malformed YAML)')}
         <CollapsibleContent>
           <pre className="px-4 py-3 text-xs font-mono text-error/80 bg-error/5
                           border-b border-page-border whitespace-pre-wrap">
@@ -295,15 +295,7 @@ const FrontmatterProperties = ({
   // Normal properties view
   return (
     <Collapsible open={!isCollapsed} onOpenChange={() => onToggleCollapse(tabId)}>
-      <CollapsibleTrigger
-        className="flex items-center gap-2 w-full px-4 py-2 text-xs font-mono
-                   text-page-text/60 bg-page-bg border-b border-page-border
-                   hover:text-page-text/80 cursor-pointer"
-      >
-        {isCollapsed ? <CaretRight size={12} /> : <CaretDown size={12} />}
-        <span>Properties {count > 0 ? `(${count})` : ''}</span>
-        {headerBtn}
-      </CollapsibleTrigger>
+      {headerRow(`Properties ${count > 0 ? `(${count})` : ''}`)}
       <CollapsibleContent>
         <div className="px-4 py-3 space-y-1.5 bg-page-bg border-b border-page-border">
           {isEditingRaw ? (

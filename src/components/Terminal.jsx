@@ -80,7 +80,9 @@ const Terminal = forwardRef(({ workspacePath }, ref) => {
 
     // Connect to Electron IPC or WebSocket
     if (window.electronAPI) {
-      window.electronAPI.createTerminal(workspacePath ? { cwd: workspacePath } : undefined);
+      window.electronAPI.createTerminal(
+        workspacePath ? { cwd: workspacePath } : undefined
+      );
 
       window.electronAPI.onTerminalData((data) => {
         term.write(data);

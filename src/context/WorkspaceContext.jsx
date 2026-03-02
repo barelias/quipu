@@ -210,10 +210,6 @@ export function WorkspaceProvider({ children }) {
     }
   }, [openTabs, extractFrontmatter, showToast]);
 
-  // Keep a ref to openTabs for use in file-watcher callbacks (avoids stale closures)
-  const openTabsRef = React.useRef(openTabs);
-  useEffect(() => { openTabsRef.current = openTabs; }, [openTabs]);
-
   // Watch workspace for external file changes (Electron only; no-op in browser)
   useEffect(() => {
     if (!workspacePath) return;
@@ -314,23 +310,6 @@ export function WorkspaceProvider({ children }) {
       return { ...t, frontmatter: { ...t.frontmatter, [key]: existing }, isDirty: true };
     }));
   }, []);
-
-  const extractFrontmatter = useCallback((rawContent) => {
-    const match = rawContent.match(FRONTMATTER_REGEX);
-    if (!match) return { frontmatter: null, frontmatterRaw: null, body: rawContent };
-
-    try {
-      const parsed = jsYaml.load(match[1]);
-      return {
-        frontmatter: typeof parsed === 'object' && parsed !== null ? parsed : null,
-        frontmatterRaw: match[1],
-        body: rawContent.slice(match[0].length),
-      };
-    } catch {
-      showToast('Malformed YAML frontmatter', 'warning');
-      return { frontmatter: null, frontmatterRaw: match[1], body: rawContent.slice(match[0].length) };
-    }
-  }, [showToast]);
 
   const openFile = useCallback(async (filePath, fileName) => {
     // Check if already open

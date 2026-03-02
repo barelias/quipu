@@ -642,11 +642,6 @@ const Editor = ({
                     )}
                     ref={pageRef}
                 >
-                    {displayTitle && (
-                        <h1 className="text-3xl font-bold font-editor text-page-text select-none break-words mb-4">
-                            {displayTitle}
-                        </h1>
-                    )}
                     {activeTab && (activeTab.frontmatter || activeTab.frontmatterRaw) && (
                         <div className="-mx-16 -mt-16 mb-6 rounded-t border-b border-page-border">
                             <FrontmatterProperties
@@ -664,6 +659,11 @@ const Editor = ({
                                 onUpdateTag={updateFrontmatterTag}
                             />
                         </div>
+                    )}
+                    {displayTitle && (
+                        <h1 className="text-3xl font-bold font-editor text-page-text select-none break-words mb-4">
+                            {displayTitle}
+                        </h1>
                     )}
                     {showMenu && (
                         <div

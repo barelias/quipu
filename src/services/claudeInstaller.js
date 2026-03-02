@@ -306,9 +306,8 @@ async function installFrameSkills(workspacePath) {
   ];
 
   for (const file of files) {
-    if (!(await fileExists(file.path))) {
-      await fs.writeFile(file.path, file.content);
-    }
+    // Always write to ensure templates are up-to-date
+    await fs.writeFile(file.path, file.content);
   }
 
   // Merge settings.json (add hook if not present)

@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#2B2926"/>
+
+  <defs>
+    <!-- Clip masks for over/under crossings -->
+    <clipPath id="upper-cross-clip">
+      <!-- Reveal only the area where upper-right strand crosses over upper-left -->
+      <rect x="220" y="140" width="100" height="70"/>
+    </clipPath>
+    <clipPath id="lower-cross-clip">
+      <!-- Reveal only the area where lower-left strand crosses over lower-right -->
+      <rect x="192" y="300" width="100" height="70"/>
+    </clipPath>
+  </defs>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- LAYER 1: Full "behind" strands at reduced opacity -->
+
+    <!-- Upper left loop (goes behind at crossing) -->
+    <path d="M 256 108
+             C 256 148, 170 158, 170 210
+             C 170 262, 256 268, 256 268"
+          stroke="#C4835A" stroke-width="36" opacity="0.3"/>
+
+    <!-- Lower right loop (goes behind at crossing) -->
+    <path d="M 256 244
+             C 256 244, 342 250, 342 302
+             C 342 354, 256 364, 256 404"
+          stroke="#C4835A" stroke-width="36" opacity="0.3"/>
+
+    <!-- LAYER 2: Full "front" strands at full opacity -->
+
+    <!-- Vertical top rope -->
+    <path d="M 256 40 L 256 108"
+          stroke="#C4835A" stroke-width="36"/>
+
+    <!-- Upper right loop (goes over at crossing) -->
+    <path d="M 256 108
+             C 256 148, 342 158, 342 210
+             C 342 262, 256 268, 256 256"
+          stroke="#C4835A" stroke-width="36"/>
+
+    <!-- Center transition -->
+    <path d="M 256 244
+             C 256 244, 170 250, 170 302
+             C 170 354, 256 364, 256 404"
+          stroke="#C4835A" stroke-width="36"/>
+
+    <!-- Vertical bottom rope -->
+    <path d="M 256 404 L 256 472"
+          stroke="#C4835A" stroke-width="36"/>
+
+    <!-- LAYER 3: Knockout + redraw at crossing points for clear over/under -->
+
+    <!-- Upper crossing: right strand goes OVER left strand -->
+    <!-- Knockout background -->
+    <path d="M 256 108
+             C 256 148, 342 158, 342 210
+             C 342 262, 256 268, 256 256"
+          stroke="#2B2926" stroke-width="48"
+          clip-path="url(#upper-cross-clip)"/>
+    <!-- Redraw front -->
+    <path d="M 256 108
+             C 256 148, 342 158, 342 210
+             C 342 262, 256 268, 256 256"
+          stroke="#C4835A" stroke-width="36"
+          clip-path="url(#upper-cross-clip)"/>
+
+    <!-- Lower crossing: left strand goes OVER right strand -->
+    <!-- Knockout background -->
+    <path d="M 256 244
+             C 256 244, 170 250, 170 302
+             C 170 354, 256 364, 256 404"
+          stroke="#2B2926" stroke-width="48"
+          clip-path="url(#lower-cross-clip)"/>
+    <!-- Redraw front -->
+    <path d="M 256 244
+             C 256 244, 170 250, 170 302
+             C 170 354, 256 364, 256 404"
+          stroke="#C4835A" stroke-width="36"
+          clip-path="url(#lower-cross-clip)"/>
+
+    <!-- LAYER 4: Subtle highlight for rope dimension -->
+    <path d="M 256 40 L 256 108"
+          stroke="#D9A87D" stroke-width="8" opacity="0.3"/>
+    <path d="M 256 404 L 256 472"
+          stroke="#D9A87D" stroke-width="8" opacity="0.3"/>
+  </g>
+</svg>
