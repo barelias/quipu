@@ -3,6 +3,7 @@ import {
     XIcon, TextBIcon, TextItalicIcon, TextStrikethroughIcon,
     TextHOneIcon, TextHTwoIcon, TextHThreeIcon,
     ListBulletsIcon, ListNumbersIcon, QuotesIcon, CodeIcon, CodeBlockIcon,
+    TableIcon, MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -44,11 +45,12 @@ const lineNumberToPos = (doc, lineNumber) => {
     return doc.content.size;
 };
 
-const ToolbarButton = ({ onClick, isActive, title, children }) => (
+const ToolbarButton = ({ onClick, isActive, title, disabled, children }) => (
     <button
-        className={cn('editor-toolbar-btn', isActive && 'active')}
-        onClick={onClick}
+        className={cn('editor-toolbar-btn', isActive && 'active', disabled && 'opacity-30 cursor-not-allowed')}
+        onClick={disabled ? undefined : onClick}
         title={title}
+        disabled={disabled}
         onMouseDown={(e) => e.preventDefault()}
     >
         {children}
@@ -93,6 +95,74 @@ const Editor = ({
         window.__quipuToggleEditorMode = toggleEditorMode;
         return () => { delete window.__quipuToggleEditorMode; };
     }, [toggleEditorMode]);
+
+    // Document zoom: 75%-200%, persisted in localStorage, independent of window zoom
+    const ZOOM_MIN = 75;
+    const ZOOM_MAX = 200;
+    const ZOOM_STEP = 25;
+
+    const [zoomLevel, setZoomLevel] = useState(() => {
+        const saved = localStorage.getItem('quipu-editor-zoom');
+        const parsed = saved ? parseInt(saved, 10) : 100;
+        return parsed >= ZOOM_MIN && parsed <= ZOOM_MAX ? parsed : 100;
+    });
+
+    const handleZoomIn = useCallback(() => {
+        setZoomLevel(prev => {
+            const next = Math.min(prev + ZOOM_STEP, ZOOM_MAX);
+            localStorage.setItem('quipu-editor-zoom', String(next));
+            return next;
+        });
+    }, []);
+
+    const handleZoomOut = useCallback(() => {
+        setZoomLevel(prev => {
+            const next = Math.max(prev - ZOOM_STEP, ZOOM_MIN);
+            localStorage.setItem('quipu-editor-zoom', String(next));
+            return next;
+        });
+    }, []);
+
+    // Table context menu state
+    const [tableContextMenu, setTableContextMenu] = useState(null);
+
+    const closeTableMenu = useCallback(() => {
+        setTableContextMenu(null);
+    }, []);
+
+    const handleEditorContextMenu = useCallback((e) => {
+        if (!editor) return;
+
+        // Check if cursor is inside a table
+        const isInTable = editor.isActive('table');
+
+        if (isInTable) {
+            e.preventDefault();
+            setTableContextMenu({ x: e.clientX, y: e.clientY });
+        }
+        // else: allow native context menu
+    }, [editor]);
+
+    // Close table context menu on click outside, Escape, or scroll
+    useEffect(() => {
+        if (!tableContextMenu) return;
+
+        const handleClick = () => closeTableMenu();
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') closeTableMenu();
+        };
+        const handleScroll = () => closeTableMenu();
+
+        document.addEventListener('click', handleClick);
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('scroll', handleScroll, true);
+
+        return () => {
+            document.removeEventListener('click', handleClick);
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('scroll', handleScroll, true);
+        };
+    }, [tableContextMenu, closeTableMenu]);
 
     const displayTitle = useMemo(() => {
         if (!activeFile?.name) return '';
@@ -602,6 +672,17 @@ const Editor = ({
                         <CodeBlockIcon size={16} />
                     </ToolbarButton>
 
+                    <ToolbarSeparator />
+
+                    <ToolbarButton
+                        onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+                        isActive={editor.isActive('table')}
+                        title="Insert Table"
+                        disabled={editor.isActive('table')}
+                    >
+                        <TableIcon size={16} />
+                    </ToolbarButton>
+
                     <div className="flex-1" />
 
                     <button
@@ -637,10 +718,15 @@ const Editor = ({
                     className={cn(
                         "w-[816px] min-h-[1056px] bg-page-bg rounded border border-page-border",
                         "shadow-[0_1px_3px_rgba(0,0,0,0.08),0_4px_12px_rgba(0,0,0,0.06),0_12px_30px_rgba(0,0,0,0.05)]",
-                        "p-16 relative shrink-0 transition-[width] duration-300",
+                        "p-16 relative shrink-0 transition-[width,transform] duration-300",
                         "max-[1150px]:w-full max-[1150px]:max-w-[816px]",
                     )}
+                    style={zoomLevel !== 100 ? {
+                        transform: `scale(${zoomLevel / 100})`,
+                        transformOrigin: 'top center',
+                    } : undefined}
                     ref={pageRef}
+                    onContextMenu={handleEditorContextMenu}
                 >
                     {activeTab && (activeTab.frontmatter || activeTab.frontmatterRaw) && (
                         <div className="-mx-16 -mt-16 mb-6 rounded-t border-b border-page-border">
@@ -789,6 +875,97 @@ const Editor = ({
                         </div>
                     ))}
                 </div>
+
+                {/* Zoom Controls */}
+                <div className="sticky bottom-4 left-0 right-0 flex justify-center pointer-events-none z-10">
+                    <div className="flex items-center gap-1 bg-bg-surface border border-border rounded-lg shadow-md px-2 py-1 pointer-events-auto">
+                        <button
+                            onClick={handleZoomOut}
+                            disabled={zoomLevel <= ZOOM_MIN}
+                            className={cn(
+                                "p-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors",
+                                zoomLevel <= ZOOM_MIN && "opacity-30 cursor-not-allowed hover:bg-transparent hover:text-text-secondary",
+                            )}
+                            title="Zoom out"
+                        >
+                            <MagnifyingGlassMinusIcon size={16} />
+                        </button>
+                        <span className="text-[11px] text-text-secondary min-w-[36px] text-center select-none">
+                            {zoomLevel}%
+                        </span>
+                        <button
+                            onClick={handleZoomIn}
+                            disabled={zoomLevel >= ZOOM_MAX}
+                            className={cn(
+                                "p-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors",
+                                zoomLevel >= ZOOM_MAX && "opacity-30 cursor-not-allowed hover:bg-transparent hover:text-text-secondary",
+                            )}
+                            title="Zoom in"
+                        >
+                            <MagnifyingGlassPlusIcon size={16} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Table Context Menu */}
+                {tableContextMenu && (
+                    <div
+                        className="fixed z-50 bg-bg-surface border border-border rounded-md shadow-lg py-1 min-w-[180px]"
+                        style={{
+                            top: tableContextMenu.y,
+                            left: tableContextMenu.x,
+                            ...(tableContextMenu.x + 180 > window.innerWidth
+                                ? { left: tableContextMenu.x - 180 }
+                                : {}),
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                    >
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={() => { editor.chain().focus().addRowBefore().run(); closeTableMenu(); }}
+                        >
+                            Add Row Above
+                        </div>
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={() => { editor.chain().focus().addRowAfter().run(); closeTableMenu(); }}
+                        >
+                            Add Row Below
+                        </div>
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={() => { editor.chain().focus().addColumnBefore().run(); closeTableMenu(); }}
+                        >
+                            Add Column Left
+                        </div>
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={() => { editor.chain().focus().addColumnAfter().run(); closeTableMenu(); }}
+                        >
+                            Add Column Right
+                        </div>
+                        <div className="h-px bg-border mx-2 my-1" />
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={() => { editor.chain().focus().deleteRow().run(); closeTableMenu(); }}
+                        >
+                            Delete Row
+                        </div>
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={() => { editor.chain().focus().deleteColumn().run(); closeTableMenu(); }}
+                        >
+                            Delete Column
+                        </div>
+                        <div className="h-px bg-border mx-2 my-1" />
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-error hover:bg-error hover:text-white"
+                            onClick={() => { editor.chain().focus().deleteTable().run(); closeTableMenu(); }}
+                        >
+                            Delete Table
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

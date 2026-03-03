@@ -46,7 +46,7 @@
   /* Fonts */
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
     Arial, sans-serif;
-  --font-editor: "Clash Grotesk", "Inter", -apple-system, BlinkMacSystemFont,
+  --font-editor: "Geist", "Inter", -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
 
@@ -185,12 +185,16 @@
    ProseMirror decorations use DOM API, so Tailwind utilities can't be applied
    directly. These are thin component classes. */
 .reveal-syntax {
-  color: var(--color-accent);
-  opacity: 0.45;
+  color: var(--color-info);
+  opacity: 0.3;
   font-family: var(--font-mono);
   font-size: 0.85em;
   user-select: none;
   pointer-events: none;
+  text-decoration: underline wavy;
+  text-decoration-color: var(--color-info);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .reveal-prefix {
