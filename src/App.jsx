@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { IconContext } from '@phosphor-icons/react';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import Editor from './components/Editor';
@@ -22,11 +22,14 @@ import frameService from './services/frameService.js';
 import claudeInstaller from './services/claudeInstaller';
 import { isCodeFile } from './utils/fileTypes';
 
+const LazyExcalidrawViewer = React.lazy(() => import('./components/ExcalidrawViewer'));
+
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState(null);
   const terminalRef = React.useRef(null);
+  const excalidrawSaveRef = React.useRef(null);
   const {
-    activeFile, saveFile, setIsDirty, showFolderPicker, selectFolder, cancelFolderPicker,
+    activeFile, saveFile, saveExcalidrawFile, setIsDirty, showFolderPicker, selectFolder, cancelFolderPicker,
     activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
@@ -217,7 +220,10 @@ function AppContent() {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        if (editorInstance && activeFile) {
+        if (activeTab?.isExcalidraw && excalidrawSaveRef.current) {
+          const sceneData = excalidrawSaveRef.current();
+          if (sceneData) saveExcalidrawFile(sceneData);
+        } else if (editorInstance && activeFile) {
           saveFile(editorInstance);
         }
       }
@@ -288,7 +294,7 @@ function AppContent() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [editorInstance, activeFile, saveFile, activeTabId, openTabs, closeTab, switchTab, handleToggleSidebar, handleToggleTerminal, createTerminalTab, sidePanelRef, terminalPanelRef]);
+  }, [editorInstance, activeFile, activeTab, saveFile, saveExcalidrawFile, activeTabId, openTabs, closeTab, switchTab, handleToggleSidebar, handleToggleTerminal, createTerminalTab, sidePanelRef, terminalPanelRef]);
 
   // --- Global Context Menu ---
   const [contextMenu, setContextMenu] = useState(null);
@@ -528,7 +534,12 @@ function AppContent() {
   const handleMenuAction = useCallback((action) => {
     switch (action) {
       case 'file.save':
-        if (editorInstance && activeFile) saveFile(editorInstance);
+        if (activeTab?.isExcalidraw && excalidrawSaveRef.current) {
+          const sceneData = excalidrawSaveRef.current();
+          if (sceneData) saveExcalidrawFile(sceneData);
+        } else if (editorInstance && activeFile) {
+          saveFile(editorInstance);
+        }
         break;
       case 'file.closeTab':
         if (activeTabId) closeTab(activeTabId);
@@ -591,7 +602,7 @@ function AppContent() {
         window.__quipuToggleEditorMode?.();
         break;
     }
-  }, [editorInstance, activeFile, saveFile, activeTabId, closeTab, sidePanelRef, terminalPanelRef, handlePanelToggle, handleToggleSidebar, handleToggleTerminal, createTerminalTab, toggleTheme, handleSendToTerminal, handleSendToClaude]);
+  }, [editorInstance, activeFile, activeTab, saveFile, saveExcalidrawFile, activeTabId, closeTab, sidePanelRef, terminalPanelRef, handlePanelToggle, handleToggleSidebar, handleToggleTerminal, createTerminalTab, toggleTheme, handleSendToTerminal, handleSendToClaude]);
 
   // Build title
   let title = 'Quipu';
@@ -661,6 +672,19 @@ function AppContent() {
                 ) : activeFile ? (
                   activeTab?.isMedia ? (
                     <MediaViewer filePath={activeTab.path} fileName={activeTab.name} />
+                  ) : activeTab?.isExcalidraw ? (
+                    <Suspense fallback={
+                      <div className="flex-1 flex items-center justify-center bg-bg-surface">
+                        <div className="text-text-secondary text-sm">Loading Excalidraw...</div>
+                      </div>
+                    }>
+                      <LazyExcalidrawViewer
+                        content={activeFile.content}
+                        activeTabId={activeTabId}
+                        onDirtyChange={setIsDirty}
+                        onSaveRequest={excalidrawSaveRef}
+                      />
+                    </Suspense>
                   ) : isCodeFile(activeFile.name) && !activeFile.isQuipu ? (
                     <CodeViewer content={activeFile.content} fileName={activeFile.name} />
                   ) : (
