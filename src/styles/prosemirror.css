@@ -214,6 +214,16 @@ mark.comment:hover {
   color: var(--color-accent);
 }
 
+.editor-toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.editor-toolbar-btn:disabled:hover {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
 /* Hide RevealMarkdown decorations in rich text mode */
 .editor-richtext .reveal-syntax {
   display: none;
