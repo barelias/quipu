@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   CaretRightIcon, CaretDownIcon, FileIcon as PhFileIcon, FolderIcon, FolderOpenIcon,
   NotebookIcon, FileJsIcon, FileJsxIcon, FileCssIcon, FileHtmlIcon,
-  FileCodeIcon, FileMdIcon, FileTextIcon, ArrowClockwiseIcon,
+  FileCodeIcon, FileMdIcon, FileTextIcon, ArrowClockwiseIcon, PencilLineIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useWorkspace } from '../context/WorkspaceContext';
@@ -18,6 +18,7 @@ function getFileIcon(name) {
     case 'json': case 'go': case 'ts': case 'tsx': return FileCodeIcon;
     case 'md': case 'markdown': return FileMdIcon;
     case 'quipu': return NotebookIcon;
+    case 'excalidraw': return PencilLineIcon;
     case 'txt': return FileTextIcon;
     default: return PhFileIcon;
   }

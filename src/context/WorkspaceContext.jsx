@@ -435,6 +435,36 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
+    const isExcalidraw = fileName.endsWith('.excalidraw');
+    if (isExcalidraw) {
+      try {
+        const content = await fs.readFile(filePath);
+        const newTab = {
+          id: crypto.randomUUID(),
+          path: filePath,
+          name: fileName,
+          content,
+          tiptapJSON: null,
+          isDirty: false,
+          isQuipu: false,
+          isMarkdown: false,
+          isMedia: false,
+          isExcalidraw: true,
+          scrollPosition: 0,
+          frontmatter: null,
+          frontmatterRaw: null,
+          diskContent: content,
+          frontmatterCollapsed: true,
+        };
+        setOpenTabs(prev => [...prev, newTab]);
+        setActiveTabId(newTab.id);
+      } catch (err) {
+        console.error('Failed to open excalidraw file:', err);
+        showToast('Failed to open excalidraw file: ' + err.message, 'error');
+      }
+      return;
+    }
+
     try {
       const content = await fs.readFile(filePath);
       const isQuipu = fileName.endsWith('.quipu');
@@ -564,6 +594,22 @@ export function WorkspaceProvider({ children }) {
     } catch (err) {
       console.error('Failed to save file:', err);
       showToast('Failed to save file: ' + err.message, 'error');
+    }
+  }, [activeTab, showToast]);
+
+  const saveExcalidrawFile = useCallback(async (sceneData) => {
+    if (!activeTab || !activeTab.isExcalidraw) return;
+
+    try {
+      const content = JSON.stringify(sceneData, null, 2);
+      await fs.writeFile(activeTab.path, content);
+      setOpenTabs(prev => prev.map(t =>
+        t.id === activeTab.id ? { ...t, isDirty: false, diskContent: content } : t
+      ));
+      showToast('File saved', 'success');
+    } catch (err) {
+      console.error('Failed to save excalidraw file:', err);
+      showToast('Failed to save excalidraw file: ' + err.message, 'error');
     }
   }, [activeTab, showToast]);
 
@@ -786,6 +832,7 @@ export function WorkspaceProvider({ children }) {
     clearRecentWorkspaces,
     openFile,
     saveFile,
+    saveExcalidrawFile,
     setIsDirty,
     toggleFolder,
     loadSubDirectory,
