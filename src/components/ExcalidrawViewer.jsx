@@ -5,9 +5,12 @@ import '@excalidraw/excalidraw/index.css';
 const ExcalidrawViewer = ({ content, filePath, onContentChange }) => {
   const [excalidrawAPI, setExcalidrawAPI] = useState(null);
   const initialDataRef = useRef(null);
-  const isInitializedRef = useRef(false);
+  const changeCountRef = useRef(0);
+  const debounceRef = useRef(null);
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
 
-  // Parse initial data from file content
+  // Parse initial data from file content (only once per file)
   if (!initialDataRef.current && content) {
     try {
       const parsed = JSON.parse(content);
@@ -25,21 +28,32 @@ const ExcalidrawViewer = ({ content, filePath, onContentChange }) => {
   }
 
   const handleChange = useCallback((elements, appState, files) => {
-    if (!isInitializedRef.current) {
-      isInitializedRef.current = true;
+    // Skip the first 2 onChange calls (Excalidraw initialization)
+    if (changeCountRef.current < 2) {
+      changeCountRef.current++;
       return;
     }
-    if (!excalidrawAPI || !onContentChange) return;
 
-    const json = serializeAsJSON(elements, appState, files, 'local');
-    onContentChange(json);
-  }, [excalidrawAPI, onContentChange]);
+    // Debounce to avoid excessive state updates
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const json = serializeAsJSON(elements, appState, files, 'local');
+      onContentChangeRef.current?.(json);
+    }, 300);
+  }, []);
 
   // Reset when file changes
   useEffect(() => {
     initialDataRef.current = null;
-    isInitializedRef.current = false;
+    changeCountRef.current = 0;
   }, [filePath]);
+
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   return (
     <div className="h-full w-full">
