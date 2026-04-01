@@ -1,7 +1,7 @@
 ---
 title: Bugfix and Polish Sprint — April 2026
 type: fix
-status: active
+status: completed
 date: 2026-04-01
 ---
 
