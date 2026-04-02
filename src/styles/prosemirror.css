@@ -149,6 +149,19 @@
   text-decoration: underline;
 }
 
+.ProseMirror .wiki-link {
+  color: var(--color-accent);
+  cursor: pointer;
+  border-bottom: 1px dashed var(--color-accent);
+  padding: 0 2px;
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.ProseMirror .wiki-link:hover {
+  background-color: var(--color-accent-muted);
+}
+
 .ProseMirror img {
   max-width: 100%;
   height: auto;

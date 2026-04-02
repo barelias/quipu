@@ -158,16 +158,7 @@ a {
 .logo-mark {
   width: 32px;
   height: 32px;
-  background: var(--accent);
-  color: white;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: 'Clash Grotesk', 'Inter', sans-serif;
-  font-weight: 700;
-  font-size: 18px;
-  line-height: 1;
+  object-fit: contain;
 }
 
 .logo-text {
@@ -1041,7 +1032,6 @@ a {
 .footer-brand .logo-mark {
   width: 28px;
   height: 28px;
-  font-size: 15px;
 }
 
 .footer-brand .logo-text {

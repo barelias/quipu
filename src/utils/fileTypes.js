@@ -44,6 +44,16 @@ export function isExcalidrawFile(fileName) {
   return fileName.endsWith('.excalidraw');
 }
 
+const MERMAID_EXTENSIONS = new Set(['.mmd', '.mermaid']);
+
+export function isMermaidFile(fileName) {
+  return MERMAID_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+export function isPdfFile(fileName) {
+  return getFileExtension(fileName) === '.pdf';
+}
+
 export function getViewerType(tab) {
   if (!tab) return null;
   if (tab.isDiff) return 'diff';

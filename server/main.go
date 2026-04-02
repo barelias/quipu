@@ -1404,7 +1404,7 @@ func handleFileStat(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	var addr = flag.String("addr", "localhost:3000", "http service address")
+	var addr = flag.String("addr", "localhost:4848", "http service address")
 	var workspace = flag.String("workspace", "", "workspace root directory (auto-detected from first /files request if not set)")
 	flag.Parse()
 	log.SetFlags(0)

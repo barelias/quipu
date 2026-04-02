@@ -19,6 +19,7 @@ import { Markdown } from 'tiptap-markdown';
 import { RevealMarkdown } from '../extensions/RevealMarkdown';
 import { BlockDragHandle } from '../extensions/BlockDragHandle';
 import { FindReplace } from '../extensions/FindReplace';
+import { WikiLink, wikiLinksToHTML } from '../extensions/WikiLink';
 import FindBar from './FindBar';
 import FrontmatterProperties from './FrontmatterProperties';
 import frameService from '../services/frameService.js';
@@ -66,7 +67,7 @@ const ToolbarSeparator = () => <div className="editor-toolbar-separator" />;
 
 const Editor = ({
     onEditorReady, onContentChange, activeFile, activeTabId, activeTab, snapshotTab,
-    workspacePath,
+    workspacePath, openFile,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
@@ -223,6 +224,25 @@ const Editor = ({
     }, [activeFile?.path, workspacePath]);
     handleImageUploadRef.current = handleImageUpload;
 
+    // Resolve a wiki link path relative to the current file and open it
+    const handleWikiLinkOpenRef = useRef(null);
+    handleWikiLinkOpenRef.current = useCallback((linkPath) => {
+        if (!openFile || !workspacePath) return;
+        // Resolve relative to current file's directory
+        const currentDir = activeFile?.path
+            ? activeFile.path.substring(0, activeFile.path.lastIndexOf('/'))
+            : workspacePath;
+        // Normalize: remove trailing slash, build absolute path
+        const cleanPath = linkPath.replace(/\/+$/, '');
+        const absolutePath = cleanPath.startsWith('/')
+            ? workspacePath + cleanPath
+            : currentDir + '/' + cleanPath;
+        const fileName = cleanPath.includes('/')
+            ? cleanPath.substring(cleanPath.lastIndexOf('/') + 1)
+            : cleanPath;
+        openFile(absolutePath, fileName);
+    }, [openFile, workspacePath, activeFile?.path]);
+
     const editor = useEditor({
         extensions: [
             StarterKit,
@@ -238,7 +258,7 @@ const Editor = ({
                 placeholder: 'Start writing...',
             }),
             Markdown.configure({
-                html: false,
+                html: true,
                 tightLists: true,
                 bulletListMarker: '-',
                 transformPastedText: true,
@@ -247,6 +267,9 @@ const Editor = ({
             RevealMarkdown,
             BlockDragHandle,
             FindReplace,
+            WikiLink.configure({
+                onOpen: (path) => handleWikiLinkOpenRef.current?.(path),
+            }),
             Highlight.configure({
                 multicolor: true,
             }).extend({
@@ -443,8 +466,9 @@ const Editor = ({
             const isMarkdown = activeFile.name.endsWith('.md') || activeFile.name.endsWith('.markdown');
 
             if (isMarkdown) {
-                // tiptap-markdown extension handles parsing raw markdown
-                editor.commands.setContent(text, { emitUpdate: false });
+                // Convert [[path|label]] wiki links to HTML spans before TipTap parses
+                const processed = wikiLinksToHTML(text);
+                editor.commands.setContent(processed, { emitUpdate: false });
             } else {
                 // Plain text - convert to paragraphs
                 const paragraphs = text.split('\n').map(line => ({

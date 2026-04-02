@@ -6,6 +6,7 @@ import frameService from '../services/frameService';
 import claudeInstaller from '../services/claudeInstaller';
 import storage, { isElectronRuntime } from '../services/storageService';
 import { useToast } from '../components/Toast';
+import { isCodeFile, isMermaidFile } from '../utils/fileTypes';
 
 const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -419,8 +420,9 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
+    const isPdf = /\.pdf$/i.test(fileName);
     const isMedia = /\.(jpe?g|png|gif|svg|webp|bmp|ico|mp4|webm|ogg|mov)$/i.test(fileName);
-    if (isMedia) {
+    if (isMedia || isPdf) {
       const newTab = {
         id: crypto.randomUUID(),
         path: filePath,
@@ -430,7 +432,8 @@ export function WorkspaceProvider({ children }) {
         isDirty: false,
         isQuipu: false,
         isMarkdown: false,
-        isMedia: true,
+        isMedia: isMedia,
+        isPdf: isPdf,
         scrollPosition: 0,
         frontmatter: null,
         frontmatterRaw: null,
@@ -537,7 +540,7 @@ export function WorkspaceProvider({ children }) {
     if (!activeTab) return;
 
     // For non-TipTap files (e.g., excalidraw), save tab content directly
-    const isNonTipTapFile = activeTab.name.endsWith('.excalidraw') || activeTab.isMedia;
+    const isNonTipTapFile = activeTab.name.endsWith('.excalidraw') || activeTab.isMedia || isCodeFile(activeTab.name) || isMermaidFile(activeTab.name);
     if ((isNonTipTapFile || !editorInstance) && activeTab.content) {
       try {
         await fs.writeFile(activeTab.path, activeTab.content);

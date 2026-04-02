@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -14,6 +14,12 @@ try {
 } catch (e) {
     // electron-squirrel-startup not available outside of Squirrel installer context
 }
+
+// Register custom protocol scheme before app is ready
+protocol.registerSchemesAsPrivileged([{
+    scheme: 'quipu-file',
+    privileges: { bypassCSP: true, stream: true, supportFetchAPI: true },
+}]);
 
 const HIDDEN_DIRS = new Set(['.git']);
 
@@ -86,6 +92,12 @@ const createWindow = () => {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 app.whenReady().then(() => {
+    // Register custom protocol to serve local files (works in both dev and prod)
+    protocol.handle('quipu-file', (request) => {
+        const filePath = decodeURIComponent(request.url.replace('quipu-file://', ''));
+        return net.fetch('file://' + filePath);
+    });
+
     createWindow();
 
     // Setup File System IPC

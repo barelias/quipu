@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -37,20 +37,78 @@ hljs.registerLanguage('php', php);
 hljs.registerLanguage('cpp', cpp);
 hljs.registerLanguage('c', c);
 
-const CodeViewer = ({ content, fileName }) => {
+const CodeViewer = ({ content, fileName, onContentChange }) => {
   const language = getLanguage(fileName);
+  const textareaRef = useRef(null);
+  const highlightRef = useRef(null);
+  const [editableContent, setEditableContent] = useState(content || '');
+
+  // Sync when file changes externally
+  useEffect(() => {
+    setEditableContent(content || '');
+  }, [content]);
 
   const highlighted = useMemo(() => {
-    if (!content) return '';
+    if (!editableContent) return '';
     if (language && hljs.getLanguage(language)) {
-      return hljs.highlight(content, { language }).value;
+      return hljs.highlight(editableContent, { language }).value;
     }
-    return hljs.highlightAuto(content).value;
-  }, [content, language]);
+    return hljs.highlightAuto(editableContent).value;
+  }, [editableContent, language]);
 
   const lineCount = useMemo(() => {
-    return (content || '').split('\n').length;
-  }, [content]);
+    return (editableContent || '').split('\n').length;
+  }, [editableContent]);
+
+  const handleChange = useCallback((e) => {
+    const newContent = e.target.value;
+    setEditableContent(newContent);
+    if (onContentChange) {
+      onContentChange(newContent);
+    }
+  }, [onContentChange]);
+
+  const handleScroll = useCallback((e) => {
+    if (highlightRef.current) {
+      highlightRef.current.scrollTop = e.target.scrollTop;
+      highlightRef.current.scrollLeft = e.target.scrollLeft;
+    }
+  }, []);
+
+  const handleKeyDown = useCallback((e) => {
+    // Handle Tab key for indentation
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const textarea = e.target;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+
+      if (e.shiftKey) {
+        // Dedent: remove leading 2 spaces from selected lines
+        const value = textarea.value;
+        const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+        const lineEnd = end;
+        const selectedText = value.substring(lineStart, lineEnd);
+        const dedented = selectedText.replace(/^  /gm, '');
+        const diff = selectedText.length - dedented.length;
+        const newValue = value.substring(0, lineStart) + dedented + value.substring(lineEnd);
+        setEditableContent(newValue);
+        if (onContentChange) onContentChange(newValue);
+        requestAnimationFrame(() => {
+          textarea.selectionStart = Math.max(lineStart, start - 2);
+          textarea.selectionEnd = end - diff;
+        });
+      } else {
+        // Indent: insert 2 spaces
+        const newValue = editableContent.substring(0, start) + '  ' + editableContent.substring(end);
+        setEditableContent(newValue);
+        if (onContentChange) onContentChange(newValue);
+        requestAnimationFrame(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + 2;
+        });
+      }
+    }
+  }, [editableContent, onContentChange]);
 
   return (
     <div className={cn(
@@ -66,7 +124,8 @@ const CodeViewer = ({ content, fileName }) => {
         "relative shrink-0 overflow-hidden",
         "max-[1150px]:w-full max-[1150px]:max-w-[816px]",
       )}>
-        <div className="flex overflow-x-auto">
+        <div className="flex overflow-hidden relative">
+          {/* Line numbers */}
           <div className="shrink-0 py-4 pr-2 pl-4 text-right select-none">
             {Array.from({ length: lineCount }, (_, i) => (
               <div key={i} className="font-mono text-xs leading-6 text-text-tertiary opacity-50">
@@ -74,12 +133,35 @@ const CodeViewer = ({ content, fileName }) => {
               </div>
             ))}
           </div>
-          <pre className="flex-1 py-4 pr-4 pl-2 font-mono text-sm leading-6 overflow-x-auto m-0 bg-transparent">
+
+          {/* Highlight layer (behind textarea) */}
+          <pre
+            ref={highlightRef}
+            className="flex-1 py-4 pr-4 pl-2 font-mono text-sm leading-6 overflow-hidden m-0 bg-transparent whitespace-pre pointer-events-none"
+            aria-hidden="true"
+          >
             <code
               className="hljs"
-              dangerouslySetInnerHTML={{ __html: highlighted }}
+              dangerouslySetInnerHTML={{ __html: highlighted + '\n' }}
             />
           </pre>
+
+          {/* Editable textarea (transparent, on top) */}
+          <textarea
+            ref={textareaRef}
+            value={editableContent}
+            onChange={handleChange}
+            onScroll={handleScroll}
+            onKeyDown={handleKeyDown}
+            spellCheck={false}
+            className={cn(
+              "absolute inset-0 py-4 pr-4 font-mono text-sm leading-6",
+              "bg-transparent text-transparent caret-text-primary",
+              "resize-none outline-none border-none",
+              "overflow-auto whitespace-pre",
+            )}
+            style={{ paddingLeft: `${4 * 0.25 + 2.5}rem`, tabSize: 2 }}
+          />
         </div>
       </div>
     </div>

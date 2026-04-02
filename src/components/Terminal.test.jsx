@@ -26,7 +26,7 @@ describe('Terminal WebSocket Reconnection Logic', () => {
     let retryCount = 0;
     let intentionalClose = false;
     let dataHandler = null;
-    const wsUrl = 'ws://localhost:3000/term';
+    const wsUrl = 'ws://localhost:4848/term';
 
     const connect = () => {
       const mockWs = {
@@ -144,7 +144,7 @@ describe('Terminal WebSocket Reconnection Logic', () => {
     mockInstance.ws.onclose();
 
     expect(mockXterm.writeln).toHaveBeenCalledWith(
-      expect.stringContaining('ws://localhost:3000/term')
+      expect.stringContaining('ws://localhost:4848/term')
     );
   });
 

@@ -20,14 +20,16 @@ import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ToastProvider, useToast } from './components/Toast';
 import frameService from './services/frameService.js';
 import claudeInstaller from './services/claudeInstaller';
-import { isCodeFile, isExcalidrawFile } from './utils/fileTypes';
+import { isCodeFile, isExcalidrawFile, isMermaidFile } from './utils/fileTypes';
 import ExcalidrawViewer from './components/ExcalidrawViewer';
+import MermaidViewer from './components/MermaidViewer';
+import PdfViewer from './components/PdfViewer';
 
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState(null);
   const terminalRef = React.useRef(null);
   const {
-    activeFile, saveFile, setIsDirty, updateTabContent, showFolderPicker, selectFolder, cancelFolderPicker,
+    activeFile, saveFile, setIsDirty, updateTabContent, showFolderPicker, selectFolder, cancelFolderPicker, openFile,
     activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
@@ -220,8 +222,8 @@ function AppContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         if (activeFile) {
-          const isExcalidraw = activeFile.name.endsWith('.excalidraw');
-          saveFile(isExcalidraw ? null : editorInstance);
+          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name);
+          saveFile(isNonTipTap ? null : editorInstance);
         }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
@@ -544,8 +546,8 @@ function AppContent() {
     switch (action) {
       case 'file.save':
         if (activeFile) {
-          const isExcalidraw = activeFile.name.endsWith('.excalidraw');
-          saveFile(isExcalidraw ? null : editorInstance);
+          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name);
+          saveFile(isNonTipTap ? null : editorInstance);
         }
         break;
       case 'file.closeTab':
@@ -677,7 +679,9 @@ function AppContent() {
                     onClose={() => setActiveDiff(null)}
                   />
                 ) : activeFile ? (
-                  activeTab?.isMedia ? (
+                  activeTab?.isPdf ? (
+                    <PdfViewer filePath={activeTab.path} fileName={activeTab.name} />
+                  ) : activeTab?.isMedia ? (
                     <MediaViewer filePath={activeTab.path} fileName={activeTab.name} />
                   ) : isExcalidrawFile(activeFile.name) ? (
                     <ExcalidrawViewer
@@ -685,8 +689,10 @@ function AppContent() {
                       filePath={activeTab.path}
                       onContentChange={handleContentChange}
                     />
+                  ) : isMermaidFile(activeFile.name) ? (
+                    <MermaidViewer content={activeFile.content} fileName={activeFile.name} onContentChange={handleContentChange} />
                   ) : isCodeFile(activeFile.name) && !activeFile.isQuipu ? (
-                    <CodeViewer content={activeFile.content} fileName={activeFile.name} />
+                    <CodeViewer content={activeFile.content} fileName={activeFile.name} onContentChange={handleContentChange} />
                   ) : (
                     <Editor
                       onEditorReady={handleEditorReady}
@@ -696,6 +702,7 @@ function AppContent() {
                       activeTab={activeTab}
                       snapshotTab={snapshotTab}
                       workspacePath={workspacePath}
+                      openFile={openFile}
                       updateFrontmatter={updateFrontmatter}
                       addFrontmatterProperty={addFrontmatterProperty}
                       removeFrontmatterProperty={removeFrontmatterProperty}
