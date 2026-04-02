@@ -61,6 +61,7 @@ function FileTreeItem({ entry, depth = 0 }) {
   const [renameValue, setRenameValue] = useState('');
   const [isCreating, setIsCreating] = useState(null); // 'file' | 'folder' | null
   const [createValue, setCreateValue] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
   const renameRef = useRef(null);
   const createRef = useRef(null);
 
@@ -200,13 +201,57 @@ function FileTreeItem({ entry, depth = 0 }) {
     return items;
   }, [entry, handleNewFile, handleNewFolder, handleRenameStart, handleDelete]);
 
+  // --- Drag and drop ---
+  const handleDragStart = useCallback((e) => {
+    e.dataTransfer.setData('text/plain', entry.path);
+    e.dataTransfer.effectAllowed = 'move';
+  }, [entry.path]);
+
+  const handleDragOver = useCallback((e) => {
+    if (!entry.isDirectory) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDragOver(true);
+  }, [entry.isDirectory]);
+
+  const handleDragLeave = useCallback((e) => {
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    if (!entry.isDirectory) return;
+
+    const sourcePath = e.dataTransfer.getData('text/plain');
+    if (!sourcePath || sourcePath === entry.path) return;
+
+    // Don't drop into own subtree
+    if (entry.path.startsWith(sourcePath + '/')) return;
+
+    const fileName = sourcePath.substring(sourcePath.lastIndexOf('/') + 1);
+    const newPath = entry.path + '/' + fileName;
+    if (newPath === sourcePath) return;
+
+    renameEntry(sourcePath, newPath);
+  }, [entry.path, entry.isDirectory, renameEntry]);
+
   return (
     <div className="relative" data-context="file-tree-item">
       <div
+        draggable={!isRenaming}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         className={cn(
           "flex items-center h-[22px] cursor-pointer gap-1 whitespace-nowrap overflow-hidden",
           "hover:bg-white/[0.06]",
           isActive && "bg-white/10",
+          isDragOver && "bg-accent/20 outline outline-1 outline-accent/50",
         )}
         style={{ paddingLeft: `${12 + depth * 16}px` }}
         onClick={handleClick}
@@ -275,13 +320,39 @@ function FileTreeItem({ entry, depth = 0 }) {
 }
 
 export default function FileExplorer() {
-  const { workspacePath, fileTree, openFolder, refreshDirectory } = useWorkspace();
+  const { workspacePath, fileTree, openFolder, refreshDirectory, renameEntry } = useWorkspace();
+  const [isRootDragOver, setIsRootDragOver] = useState(false);
 
   const handleRefresh = useCallback(() => {
     if (workspacePath) {
       refreshDirectory(workspacePath);
     }
   }, [workspacePath, refreshDirectory]);
+
+  const handleRootDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setIsRootDragOver(true);
+  }, []);
+
+  const handleRootDragLeave = useCallback(() => {
+    setIsRootDragOver(false);
+  }, []);
+
+  const handleRootDrop = useCallback((e) => {
+    e.preventDefault();
+    setIsRootDragOver(false);
+    if (!workspacePath) return;
+
+    const sourcePath = e.dataTransfer.getData('text/plain');
+    if (!sourcePath) return;
+
+    const fileName = sourcePath.substring(sourcePath.lastIndexOf('/') + 1);
+    const newPath = workspacePath + '/' + fileName;
+    if (newPath === sourcePath) return;
+
+    renameEntry(sourcePath, newPath);
+  }, [workspacePath, renameEntry]);
 
   return (
     <div className="bg-bg-surface text-text-primary flex flex-col select-none text-[13px] font-sans flex-1 overflow-hidden">
@@ -317,7 +388,15 @@ export default function FileExplorer() {
           >
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{workspacePath.split('/').pop()}</span>
           </div>
-          <div className="flex-1 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-thumb]:bg-white/15 [&::-webkit-scrollbar-thumb:hover]:bg-white/25">
+          <div
+            className={cn(
+              "flex-1 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-thumb]:bg-white/15 [&::-webkit-scrollbar-thumb:hover]:bg-white/25",
+              isRootDragOver && "bg-accent/10",
+            )}
+            onDragOver={handleRootDragOver}
+            onDragLeave={handleRootDragLeave}
+            onDrop={handleRootDrop}
+          >
             {fileTree.map((entry) => (
               <FileTreeItem key={entry.path} entry={entry} depth={0} />
             ))}

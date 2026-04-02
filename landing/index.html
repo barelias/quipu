@@ -24,6 +24,7 @@
       <div class="nav-links" id="nav-links">
         <a href="#features">Features</a>
         <a href="#editor">Editor</a>
+        <a href="#frame">FRAME</a>
         <a href="#themes">Themes</a>
         <a href="https://github.com/barelias/quipu" target="_blank" rel="noopener">GitHub</a>
       </div>
@@ -306,6 +307,115 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FRAME -->
+  <section class="frame-section" id="frame">
+    <div class="container">
+      <div class="section-header anim-fade-up">
+        <h2 class="section-title">The FRAME envelope</h2>
+        <p class="section-subtitle">
+          Every file in your workspace can carry an invisible layer of context.
+          FRAME is Quipu's per-file metadata system &mdash; annotations, instructions,
+          and conversation history that travel with your files without touching them.
+        </p>
+      </div>
+
+      <div class="frame-layout anim-fade-up" style="--delay: 0.1s">
+        <!-- Visual: file + frame sidecar -->
+        <div class="frame-visual">
+          <div class="frame-file-pair">
+            <div class="frame-file">
+              <div class="frame-file-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                <span>src/App.jsx</span>
+              </div>
+              <div class="frame-file-body">
+                <code>function App() {</code>
+                <code>  const [state, setState]</code>
+                <code class="frame-highlighted">  // render sidebar<span class="frame-annotation-dot" title="2 annotations"></span></code>
+                <code>  return &lt;Layout&gt;</code>
+                <code>    ...</code>
+              </div>
+            </div>
+            <div class="frame-arrow">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+            <div class="frame-file frame-sidecar">
+              <div class="frame-file-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 7h8M8 11h5"/></svg>
+                <span>.quipu/meta/src/App.jsx.frame.json</span>
+              </div>
+              <div class="frame-file-body frame-json">
+                <code>{</code>
+                <code>  <span class="fj-key">"annotations"</span>: [</code>
+                <code>    { <span class="fj-key">"line"</span>: <span class="fj-num">3</span>,</code>
+                <code>      <span class="fj-key">"text"</span>: <span class="fj-str">"Refactor this"</span> }</code>
+                <code>  ],</code>
+                <code>  <span class="fj-key">"instructions"</span>: <span class="fj-str">"..."</span>,</code>
+                <code>  <span class="fj-key">"history"</span>: [...]</code>
+                <code>}</code>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Explanation -->
+        <div class="frame-details">
+          <div class="frame-detail-card anim-fade-up" style="--delay: 0.15s">
+            <div class="frame-detail-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            </div>
+            <h3>Annotations</h3>
+            <p>
+              Highlight any line and leave a comment. Annotations are anchored to specific
+              lines in your code or prose &mdash; review notes, TODOs, questions, all visible
+              inline without cluttering the source file.
+            </p>
+          </div>
+          <div class="frame-detail-card anim-fade-up" style="--delay: 0.2s">
+            <div class="frame-detail-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </div>
+            <h3>Instructions</h3>
+            <p>
+              Each file can carry its own instructions &mdash; persistent context that tells AI
+              tools how this file should be treated. Think of it as a per-file README
+              that only your tools see.
+            </p>
+          </div>
+          <div class="frame-detail-card anim-fade-up" style="--delay: 0.25s">
+            <div class="frame-detail-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <h3>History</h3>
+            <p>
+              Every AI interaction on a file is logged &mdash; what you asked, what changed,
+              and when. Scroll back through the conversation history to understand
+              how a file evolved, or pick up where you left off.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame-principles anim-fade-up" style="--delay: 0.3s">
+        <div class="frame-principle">
+          <strong>Non-invasive.</strong>
+          FRAME metadata lives in <code>.quipu/meta/</code>, never inside your source files.
+          Your code stays clean. Gitignore the folder or commit it &mdash; your choice.
+        </div>
+        <div class="frame-principle">
+          <strong>Per-file, not global.</strong>
+          Every file gets its own envelope. No monolithic config. Context stays local
+          to the file it belongs to, so it scales with your project.
+        </div>
+        <div class="frame-principle">
+          <strong>Tool-agnostic.</strong>
+          FRAME files are plain JSON. Any tool &mdash; Claude, Copilot, your own scripts &mdash;
+          can read and write them. Quipu creates the envelope; your workflow fills it.
         </div>
       </div>
     </div>

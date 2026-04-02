@@ -847,6 +847,192 @@ a {
 }
 
 /* ========================================================================
+   FRAME Section
+   ======================================================================== */
+.frame-section {
+  padding: 100px 0;
+  background: var(--bg-elevated);
+}
+
+:root.dark .frame-section {
+  background: var(--bg-surface);
+}
+
+.frame-layout {
+  margin-top: 56px;
+}
+
+/* File pair visual */
+.frame-visual {
+  margin-bottom: 56px;
+}
+
+.frame-file-pair {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0;
+}
+
+.frame-arrow {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  color: var(--text-tertiary);
+}
+
+.frame-file {
+  flex: 0 1 380px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.frame-sidecar {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.frame-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+}
+
+.frame-sidecar .frame-file-header {
+  color: var(--accent);
+}
+
+.frame-file-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.frame-file-body code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre;
+}
+
+.frame-highlighted {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0 -4px;
+  position: relative;
+}
+
+.frame-annotation-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.frame-json code .fj-key {
+  color: var(--accent);
+}
+
+.frame-json code .fj-str {
+  color: #e5915b;
+}
+
+:root.dark .frame-json code .fj-str {
+  color: #f0a870;
+}
+
+.frame-json code .fj-num {
+  color: #7c6fd4;
+}
+
+/* Detail cards */
+.frame-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  margin-bottom: 56px;
+}
+
+.frame-detail-card {
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-base);
+}
+
+.frame-detail-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.frame-detail-card h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.frame-detail-card p {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+/* Principles */
+.frame-principles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  padding: 32px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-base);
+}
+
+.frame-principle {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.frame-principle strong {
+  display: block;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.frame-principle code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+}
+
+/* ========================================================================
    Themes Section
    ======================================================================== */
 .themes-section {
@@ -1087,6 +1273,27 @@ a {
   .format-card {
     width: 100%;
     max-width: 280px;
+  }
+
+  .frame-file-pair {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .frame-arrow {
+    transform: rotate(90deg);
+    padding: 12px 0;
+  }
+
+  .frame-file {
+    flex: none;
+    width: 100%;
+    max-width: 420px;
+  }
+
+  .frame-details,
+  .frame-principles {
+    grid-template-columns: 1fr;
   }
 
   .mockup-sidebar {
