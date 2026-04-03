@@ -85,7 +85,7 @@ workspace/
 | `type` | string | Always `"frame"` |
 | `id` | string | UUID v4 for this FRAME |
 | `filePath` | string | Relative path from workspace root |
-| `annotations[].type` | string | One of: `review`, `todo`, `bug`, `question`, `instruction` |
+| `annotations[].type` | string | One of: `comment`, `review`, `todo`, `bug`, `question`, `instruction` |
 | `annotations[].author` | string | `"user"` or `"ai"` |
 | `history[]` | array | Capped at 20 entries (FIFO eviction). Store summaries, not full responses. |
 | `instructions` | string | Persistent context Claude should know about this file |
@@ -113,6 +113,23 @@ Or use the Read tool directly on the computed path.
 4. Ensure `history` has at most 20 entries (remove oldest if over)
 5. Write the JSON back to the FRAME path
 6. Create intermediate directories if they don't exist (`mkdir -p`)
+
+## Annotation Type Behaviors
+
+When processing annotations, the agent should interpret each type differently:
+
+| Type | Behavior | When to use |
+|------|----------|-------------|
+| `comment` | Informational note. Read and acknowledge but no action required unless the content is imperative. | Default type. General observations, thoughts, context notes. |
+| `review` | Mixed feedback — may contain suggestions, critiques, or praise. Evaluate each point and propose improvements where the author identifies weaknesses. | Code review comments, design feedback, editorial suggestions. |
+| `todo` | Actionable task. The agent should attempt to complete the described work. | Concrete work items: "add error handling here", "extract this to a function". |
+| `bug` | Reported defect. The agent should investigate, confirm the bug, and propose or implement a fix. | "This crashes when input is null", "off-by-one error in loop". |
+| `question` | The author needs clarification. The agent should answer the question, referencing code context. Do not modify code unless the answer implies a fix. | "Why does this use setTimeout?", "Is this O(n²)?". |
+| `instruction` | Persistent directive the agent must follow when modifying this file. Unlike `todo`, instructions are ongoing constraints, not one-time tasks. | "Always validate auth before DB queries", "Keep this file under 200 lines". |
+
+**Processing priority**: `bug` > `todo` > `instruction` > `review` > `question` > `comment`
+
+When a file has multiple annotations, process higher-priority types first. Instructions should be treated as constraints that apply to all other work on the file.
 
 ## Rules
 

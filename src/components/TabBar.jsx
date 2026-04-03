@@ -26,10 +26,10 @@ export default function TabBar() {
                         key={tab.id}
                         data-tab-id={tab.id}
                         className={cn(
-                            "group/tab flex items-center gap-1.5 px-3",
+                            "group/tab flex items-center gap-1.5 px-4",
                             "cursor-pointer border-r border-border whitespace-nowrap",
                             "text-[13px] text-text-primary opacity-70",
-                            "min-w-0 shrink-0 relative",
+                            "min-w-[120px] shrink-0 relative",
                             "hover:opacity-100 hover:bg-white/[0.04]",
                             "transition-opacity",
                             isActive && "opacity-100 bg-page-bg border-b-2 border-b-accent",
@@ -40,7 +40,7 @@ export default function TabBar() {
                         onClick={() => switchTab(tab.id)}
                         title={tab.path}
                     >
-                        <span className="overflow-hidden text-ellipsis max-w-[150px] font-sans">
+                        <span className="overflow-hidden text-ellipsis max-w-[180px] font-sans">
                             {tab.name}
                         </span>
                         <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">

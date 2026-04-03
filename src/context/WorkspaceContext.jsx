@@ -86,6 +86,9 @@ export function WorkspaceProvider({ children }) {
   const openTabsRef = useRef(openTabs);
   useEffect(() => { openTabsRef.current = openTabs; }, [openTabs]);
 
+  // Track recently saved paths to suppress file watcher false conflicts
+  const recentSavesRef = useRef(new Map()); // path -> timestamp
+
   // Derived values (computed, not useState)
   const activeTab = openTabs.find(t => t.id === activeTabId) || null;
   const activeFile = activeTab ? {
@@ -252,6 +255,30 @@ export function WorkspaceProvider({ children }) {
       return next;
     });
   }, []);
+
+  // Expand all ancestor folders of a path, then toggle the target
+  const revealFolder = useCallback((folderPath) => {
+    if (!workspacePath || !folderPath.startsWith(workspacePath)) return;
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      // Expand every ancestor from workspace root to the target
+      const relative = folderPath.substring(workspacePath.length + 1);
+      const segments = relative.split('/');
+      let current = workspacePath;
+      for (const seg of segments) {
+        current += '/' + seg;
+        if (current === folderPath) {
+          // Toggle the target itself
+          if (next.has(current)) next.delete(current);
+          else next.add(current);
+        } else {
+          // Always expand ancestors
+          next.add(current);
+        }
+      }
+      return next;
+    });
+  }, [workspacePath]);
 
   const setTabDirty = useCallback((tabId, dirty) => {
     setOpenTabs(prev => prev.map(t =>
@@ -539,10 +566,14 @@ export function WorkspaceProvider({ children }) {
   const saveFile = useCallback(async (editorInstance) => {
     if (!activeTab) return;
 
+    // NEVER write to binary files — they would be corrupted
+    if (activeTab.isPdf || activeTab.isMedia || /\.pdf$/i.test(activeTab.name)) return;
+
     // For non-TipTap files (e.g., excalidraw), save tab content directly
     const isNonTipTapFile = activeTab.name.endsWith('.excalidraw') || activeTab.isMedia || isCodeFile(activeTab.name) || isMermaidFile(activeTab.name);
     if ((isNonTipTapFile || !editorInstance) && activeTab.content) {
       try {
+        recentSavesRef.current.set(activeTab.path, Date.now());
         await fs.writeFile(activeTab.path, activeTab.content);
         setOpenTabs(prev => prev.map(t =>
           t.id === activeTab.id ? { ...t, isDirty: false, diskContent: activeTab.content, hasConflict: false, conflictDiskContent: null } : t
@@ -582,6 +613,7 @@ export function WorkspaceProvider({ children }) {
     }
 
     try {
+      recentSavesRef.current.set(activeTab.path, Date.now());
       await fs.writeFile(activeTab.path, content);
       // Update diskContent so file watcher doesn't trigger on our own save
       // Also clear any conflict state since saving resolves it
@@ -700,6 +732,12 @@ export function WorkspaceProvider({ children }) {
     const cleanup = fs.onDirectoryChanged(async ({ filename }) => {
       if (!filename) return;
       const fullPath = workspacePath + '/' + filename.replace(/\\/g, '/');
+
+      // Skip if this file was saved by us recently (within 3s) — don't delete entry,
+      // OS may fire multiple events for a single write
+      const savedAt = recentSavesRef.current.get(fullPath);
+      if (savedAt && Date.now() - savedAt < 3000) return;
+
       const tab = openTabsRef.current.find(t => t.path === fullPath);
       if (!tab || tab.isMedia) return;
 
@@ -733,6 +771,12 @@ export function WorkspaceProvider({ children }) {
     const cleanup = fileWatcher.onChanged(async ({ filename }) => {
       if (!filename) return;
       const fullPath = workspacePath + '/' + filename.replace(/\\/g, '/');
+
+      // Skip if this file was saved by us recently (within 3s) — don't delete entry,
+      // OS may fire multiple events for a single write
+      const savedAt = recentSavesRef.current.get(fullPath);
+      if (savedAt && Date.now() - savedAt < 3000) return;
+
       const tab = openTabsRef.current.find(t => t.path === fullPath);
       if (!tab || tab.isMedia) return;
 
@@ -773,7 +817,6 @@ export function WorkspaceProvider({ children }) {
       setOpenTabs(prev => prev.map(t =>
         t.id === tab.id ? { ...t, frameReloadKey: (t.frameReloadKey || 0) + 1 } : t
       ));
-      showToast('Annotations updated', 'info');
     });
 
     frameCleanupRef.current = cleanup;
@@ -817,6 +860,7 @@ export function WorkspaceProvider({ children }) {
     setIsDirty,
     updateTabContent,
     toggleFolder,
+    revealFolder,
     loadSubDirectory,
     createNewFile,
     createNewFolder,

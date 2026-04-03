@@ -57,8 +57,10 @@ export const WikiLink = Node.create({
 
   addProseMirrorPlugins() {
     const extensionThis = this;
+    const wikiLinkType = this.type;
 
     return [
+      // Click handler for wiki links
       new Plugin({
         key: new PluginKey('wikiLinkClick'),
         props: {
@@ -73,6 +75,46 @@ export const WikiLink = Node.create({
               }
             }
             return false;
+          },
+        },
+      }),
+      // Text input handler: when user types `]`, check if we have `[[...]]` pattern
+      new Plugin({
+        key: new PluginKey('wikiLinkInput'),
+        props: {
+          handleTextInput(view, from, to, text) {
+            if (text !== ']') return false;
+
+            const { state } = view;
+            const $from = state.doc.resolve(from);
+            const textBefore = $from.parent.textBetween(
+              0, $from.parentOffset, undefined, '\ufffc'
+            ) + ']'; // include the `]` being typed
+
+            // Match [[...]] or \[\[...\]\] at the end
+            const unescaped = textBefore.match(/\[\[([^\]]+)\]\]$/);
+            const escaped = textBefore.match(/\\\[\\\[([^\]\\]+)\\\]\\\]$/);
+            const match = unescaped || escaped;
+            if (!match) return false;
+
+            const inner = match[1];
+            const pipeIdx = inner.indexOf('|');
+            const path = pipeIdx >= 0 ? inner.substring(0, pipeIdx) : inner;
+            const label = pipeIdx >= 0 ? inner.substring(pipeIdx + 1) : null;
+
+            // Calculate the start position of the matched pattern in the document
+            const matchLen = match[0].length;
+            const blockStart = $from.start();
+            const matchStart = blockStart + $from.parentOffset - (matchLen - 1); // -1 because `]` not yet inserted
+
+            const tr = state.tr;
+            tr.replaceWith(
+              matchStart,
+              from, // end is where the cursor is (before the typed `]`)
+              wikiLinkType.create({ path, label })
+            );
+            view.dispatch(tr);
+            return true;
           },
         },
       }),

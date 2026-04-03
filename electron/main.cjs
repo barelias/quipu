@@ -43,7 +43,7 @@ function writeStorage(data) {
 
 let mainWindow;
 const ptyProcesses = new Map(); // terminalId -> ptyProcess
-const MAX_TERMINALS = 5;
+const MAX_TERMINALS = 10;
 
 const createWindow = () => {
     // Create the browser window.

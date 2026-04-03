@@ -34,7 +34,7 @@ function AppContent() {
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
-    workspacePath,
+    workspacePath, revealFolder,
     terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
     resolveConflictReload, resolveConflictKeep, resolveConflictDismiss,
     reloadTabFromDisk,
@@ -54,6 +54,32 @@ function AppContent() {
     window.__quipuTerminalRef = terminalRef;
     return () => { delete window.__quipuTerminalRef; };
   }, []);
+
+  // Snapshot the TipTap editor content before switching away to a non-Editor viewer (e.g., PDF)
+  // Uses a ref + callback approach instead of useEffect to avoid race conditions
+  // where Editor.jsx's content loading effect might run first
+  const prevActiveTabIdRef = React.useRef(activeTabId);
+  // Track tab changes — snapshot only when switching TO a non-Editor viewer
+  useEffect(() => {
+    const prevId = prevActiveTabIdRef.current;
+    prevActiveTabIdRef.current = activeTabId;
+
+    if (prevId && prevId !== activeTabId) {
+      // Check if the NEW active tab will NOT use the Editor component
+      const newTab = openTabs.find(t => t.id === activeTabId);
+      const isNewTabNonEditor = newTab && (
+        newTab.isPdf || newTab.isMedia ||
+        isExcalidrawFile(newTab.name) || isMermaidFile(newTab.name) ||
+        (isCodeFile(newTab.name) && !newTab.isQuipu)
+      );
+
+      // Only snapshot here if Editor is about to unmount (non-Editor tab)
+      // For Editor-to-Editor switches, Editor.jsx handles the snapshot internally
+      if (isNewTabNonEditor && editorInstance && !editorInstance.isDestroyed) {
+        snapshotTab(prevId, editorInstance.getJSON(), 0);
+      }
+    }
+  }, [activeTabId, editorInstance, snapshotTab, openTabs]);
 
   // Clear diff view when user switches to a different tab
   useEffect(() => {
@@ -222,7 +248,7 @@ function AppContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         if (activeFile) {
-          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name);
+          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name) || window.__quipuEditorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
       }
@@ -546,7 +572,7 @@ function AppContent() {
     switch (action) {
       case 'file.save':
         if (activeFile) {
-          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name);
+          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name) || window.__quipuEditorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
         break;
@@ -703,6 +729,7 @@ function AppContent() {
                       snapshotTab={snapshotTab}
                       workspacePath={workspacePath}
                       openFile={openFile}
+                      revealFolder={revealFolder}
                       updateFrontmatter={updateFrontmatter}
                       addFrontmatterProperty={addFrontmatterProperty}
                       removeFrontmatterProperty={removeFrontmatterProperty}

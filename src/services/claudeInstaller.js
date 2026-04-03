@@ -88,7 +88,7 @@ workspace/
 | \`type\` | string | Always \`"frame"\` |
 | \`id\` | string | UUID v4 for this FRAME |
 | \`filePath\` | string | Relative path from workspace root |
-| \`annotations[].type\` | string | One of: \`review\`, \`todo\`, \`bug\`, \`question\`, \`instruction\` |
+| \`annotations[].type\` | string | One of: \`comment\`, \`review\`, \`todo\`, \`bug\`, \`question\`, \`instruction\` |
 | \`annotations[].author\` | string | \`"user"\` or \`"ai"\` |
 | \`history[]\` | array | Capped at 20 entries (FIFO eviction). Store summaries, not full responses. |
 | \`instructions\` | string | Persistent context Claude should know about this file |
@@ -214,8 +214,21 @@ mkdir -p .quipu/meta/path/to/directory/
 - Use the \`frame\` skill for schema details and field reference
 - All timestamps: ISO 8601 UTC
 - History capped at 20 entries (remove oldest when exceeded)
-- Annotations use \`type\`: review, todo, bug, question, instruction
+- Annotations use \`type\`: comment, review, todo, bug, question, instruction
 - Store summaries in history, not full responses
+
+## Annotation Type Behaviors
+
+| Type | Behavior |
+|------|----------|
+| \`comment\` | Informational note. Read and acknowledge, no action unless imperative. |
+| \`review\` | Mixed feedback — evaluate each point and propose improvements. |
+| \`todo\` | Actionable task. Attempt to complete the described work. |
+| \`bug\` | Reported defect. Investigate, confirm, and fix. |
+| \`question\` | Author needs clarification. Answer referencing code context. |
+| \`instruction\` | Persistent directive to follow when modifying this file. |
+
+**Priority**: bug > todo > instruction > review > question > comment
 `;
 
 // Template content for load-frame hook script

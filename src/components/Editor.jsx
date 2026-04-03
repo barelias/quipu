@@ -20,6 +20,7 @@ import { RevealMarkdown } from '../extensions/RevealMarkdown';
 import { BlockDragHandle } from '../extensions/BlockDragHandle';
 import { FindReplace } from '../extensions/FindReplace';
 import { WikiLink, wikiLinksToHTML } from '../extensions/WikiLink';
+import { CodeBlockWithLang } from '../extensions/CodeBlockWithLang';
 import FindBar from './FindBar';
 import FrontmatterProperties from './FrontmatterProperties';
 import frameService from '../services/frameService.js';
@@ -67,21 +68,35 @@ const ToolbarSeparator = () => <div className="editor-toolbar-separator" />;
 
 const Editor = ({
     onEditorReady, onContentChange, activeFile, activeTabId, activeTab, snapshotTab,
-    workspacePath, openFile,
+    workspacePath, openFile, revealFolder,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
 }) => {
+    const ANNOTATION_TYPES = ['comment', 'review', 'todo', 'bug', 'question', 'instruction'];
+    const TYPE_COLORS = {
+        comment: 'bg-text-tertiary/20 text-text-secondary',
+        review: 'bg-accent/20 text-accent',
+        todo: 'bg-info/20 text-info',
+        bug: 'bg-error/20 text-error',
+        question: 'bg-warning/20 text-warning',
+        instruction: 'bg-success/20 text-success',
+    };
+
     const [commentText, setCommentText] = useState('');
+    const [commentType, setCommentType] = useState('comment');
     const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
     const [showMenu, setShowMenu] = useState(false);
     const [comments, setComments] = useState([]);
     const [showCommentInput, setShowCommentInput] = useState(false);
     const [commentInputTop, setCommentInputTop] = useState(0);
+    const savedSelectionRef = useRef(null); // saved {from, to} for comment mark
     const menuRef = useRef(null);
     const pageRef = useRef(null);
     const commentsRef = useRef({});
     const loadedTabRef = useRef(null);
+    const isLoadingContentRef = useRef(false); // suppress onUpdate during setContent
+    const recentFrameSaveRef = useRef(0); // timestamp of our last FRAME write
 
     const [showFindBar, setShowFindBar] = useState(false);
 
@@ -90,14 +105,77 @@ const Editor = ({
         return localStorage.getItem('quipu-editor-mode') || 'richtext';
     });
 
+    // Refs to access editor/rawContent inside toggleEditorMode without temporal dead zone
+    const editorRefForToggle = useRef(null);
+    const rawContentRef = useRef('');
+
     const toggleEditorMode = useCallback(() => {
         setEditorMode(prev => {
             const cycle = { richtext: 'obsidian', obsidian: 'raw', raw: 'richtext' };
             const next = cycle[prev] || 'richtext';
             localStorage.setItem('quipu-editor-mode', next);
+
+            // When leaving raw mode, sync raw edits back into TipTap
+            const ed = editorRefForToggle.current;
+            const raw = rawContentRef.current;
+            if (prev === 'raw' && ed && !ed.isDestroyed && raw) {
+                const isMarkdown = activeFile?.name?.endsWith('.md') || activeFile?.name?.endsWith('.markdown');
+                if (isMarkdown) {
+                    const processed = wikiLinksToHTML(raw);
+                    ed.commands.setContent(processed, { emitUpdate: false });
+                } else if (activeFile?.isQuipu) {
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (parsed.content) {
+                            ed.commands.setContent(parsed.content, { emitUpdate: false });
+                        }
+                    } catch { /* invalid JSON — keep old content */ }
+                } else {
+                    const paragraphs = raw.split('\n').map(line => ({
+                        type: 'paragraph',
+                        content: line ? [{ type: 'text', text: line }] : [],
+                    }));
+                    ed.commands.setContent({
+                        type: 'doc',
+                        content: paragraphs.length > 0 ? paragraphs : [{ type: 'paragraph' }],
+                    }, { emitUpdate: false });
+                }
+            }
+
             return next;
         });
-    }, []);
+    }, [activeFile]);
+
+    // Raw mode editing state
+    const [rawContent, setRawContent] = useState('');
+    // Keep ref in sync for toggleEditorMode
+    useEffect(() => { rawContentRef.current = rawContent; }, [rawContent]);
+
+    // Sync raw content when switching to raw mode or when active file changes
+    useEffect(() => {
+        if (editorMode !== 'raw' || !activeFile) return;
+        if (activeFile.isQuipu && typeof activeFile.content === 'object') {
+            setRawContent(JSON.stringify(activeFile.content, null, 2));
+        } else if (editor?.storage?.markdown?.getMarkdown) {
+            setRawContent(editor.storage.markdown.getMarkdown());
+        } else {
+            setRawContent(typeof activeFile.content === 'string' ? activeFile.content : '');
+        }
+    }, [editorMode, activeFile?.path]);
+
+    // Expose raw mode flag for save logic
+    useEffect(() => {
+        window.__quipuEditorRawMode = editorMode === 'raw';
+        return () => { delete window.__quipuEditorRawMode; };
+    }, [editorMode]);
+
+    const handleRawContentChange = useCallback((e) => {
+        const value = e.target.value;
+        setRawContent(value);
+        if (onContentChange) {
+            onContentChange(value);
+        }
+    }, [onContentChange]);
 
     // Expose toggleEditorMode for command palette (editor.toggleMode action)
     useEffect(() => {
@@ -137,6 +215,21 @@ const Editor = ({
             return next;
         });
     }, []);
+
+    // Ctrl+scroll zoom — must use ref + addEventListener with { passive: false }
+    const editorScrollRef = useRef(null);
+    useEffect(() => {
+        const el = editorScrollRef.current;
+        if (!el) return;
+        const handler = (e) => {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            if (e.deltaY < 0) handleZoomIn();
+            else handleZoomOut();
+        };
+        el.addEventListener('wheel', handler, { passive: false });
+        return () => el.removeEventListener('wheel', handler);
+    }, [handleZoomIn, handleZoomOut]);
 
     // Table context menu state
     const [tableContextMenu, setTableContextMenu] = useState(null);
@@ -226,7 +319,7 @@ const Editor = ({
 
     // Resolve a wiki link path relative to the current file and open it
     const handleWikiLinkOpenRef = useRef(null);
-    handleWikiLinkOpenRef.current = useCallback((linkPath) => {
+    handleWikiLinkOpenRef.current = useCallback(async (linkPath) => {
         if (!openFile || !workspacePath) return;
         // Resolve relative to current file's directory
         const currentDir = activeFile?.path
@@ -237,15 +330,29 @@ const Editor = ({
         const absolutePath = cleanPath.startsWith('/')
             ? workspacePath + cleanPath
             : currentDir + '/' + cleanPath;
+
+        // Check if path is a directory by trying readDirectory
+        if (revealFolder) {
+            try {
+                await fs.readDirectory(absolutePath);
+                // Success means it's a directory — expand ancestors and toggle target
+                revealFolder(absolutePath);
+                return;
+            } catch {
+                // Not a directory or doesn't exist — fall through to openFile
+            }
+        }
+
         const fileName = cleanPath.includes('/')
             ? cleanPath.substring(cleanPath.lastIndexOf('/') + 1)
             : cleanPath;
         openFile(absolutePath, fileName);
-    }, [openFile, workspacePath, activeFile?.path]);
+    }, [openFile, workspacePath, activeFile?.path, revealFolder]);
 
     const editor = useEditor({
         extensions: [
-            StarterKit,
+            StarterKit.configure({ codeBlock: false }),
+            CodeBlockWithLang,
             Table.configure({ resizable: false }),
             TableRow,
             TableHeader,
@@ -352,8 +459,23 @@ const Editor = ({
                 }
                 return true;
             },
+            handleClick: (view, pos, event) => {
+                const target = event.target;
+                // Handle external link clicks — open in new tab/system browser
+                if (target.tagName === 'A' && target.href) {
+                    const href = target.href;
+                    if (href.startsWith('http://') || href.startsWith('https://')) {
+                        event.preventDefault();
+                        window.open(href, '_blank');
+                        return true;
+                    }
+                }
+                return false;
+            },
         },
         onUpdate: ({ editor }) => {
+            // Skip updates triggered by programmatic setContent during tab loading
+            if (isLoadingContentRef.current) return;
             if (onContentChange) {
                 onContentChange();
             }
@@ -415,6 +537,9 @@ const Editor = ({
         };
     }, [tableContextMenu, closeTableMenu]);
 
+    // Keep editor ref in sync for toggleEditorMode
+    useEffect(() => { editorRefForToggle.current = editor; }, [editor]);
+
     // Notify parent when editor is ready
     useEffect(() => {
         if (editor && onEditorReady) {
@@ -442,52 +567,46 @@ const Editor = ({
         }
 
         loadedTabRef.current = tabKey;
+        isLoadingContentRef.current = true;
 
-        // If tab has a tiptapJSON snapshot, use it (returning to a previously viewed tab)
-        // Skip snapshot on external reload (tiptapJSON is null after reload)
-        if (activeTab && activeTab.tiptapJSON) {
-            editor.commands.setContent(activeTab.tiptapJSON, { emitUpdate: false });
+        // Defer setContent to a microtask to avoid flushSync warnings from
+        // CodeBlockLowlight decorations firing during React's render phase
+        queueMicrotask(() => {
+            if (!editor || editor.isDestroyed) { isLoadingContentRef.current = false; return; }
+
+            // If tab has a tiptapJSON snapshot, use it (returning to a previously viewed tab)
+            if (activeTab && activeTab.tiptapJSON) {
+                editor.commands.setContent(activeTab.tiptapJSON, { emitUpdate: false });
+            } else if (activeFile.isQuipu && typeof activeFile.content === 'object') {
+                editor.commands.setContent(activeFile.content, { emitUpdate: false });
+            } else {
+                const text = typeof activeFile.content === 'string' ? activeFile.content : '';
+                const isMarkdown = activeFile.name.endsWith('.md') || activeFile.name.endsWith('.markdown');
+
+                if (isMarkdown) {
+                    const processed = wikiLinksToHTML(text);
+                    editor.commands.setContent(processed, { emitUpdate: false });
+                } else {
+                    const paragraphs = text.split('\n').map(line => ({
+                        type: 'paragraph',
+                        content: line ? [{ type: 'text', text: line }] : [],
+                    }));
+                    editor.commands.setContent({
+                        type: 'doc',
+                        content: paragraphs.length > 0 ? paragraphs : [{ type: 'paragraph' }],
+                    }, { emitUpdate: false });
+                }
+            }
+
+            // Double rAF: first frame lets TipTap process the new state,
+            // second frame ensures the view's DOM positions are valid for coordsAtPos
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
+                    isLoadingContentRef.current = false;
                     if (editor && !editor.isDestroyed) {
                         extractComments(editor);
                     }
                 });
-            });
-            return;
-        }
-
-        // Otherwise load from file content (first time opening this tab, or after external reload)
-        if (activeFile.isQuipu && typeof activeFile.content === 'object') {
-            // Quipu format - load TipTap JSON directly
-            editor.commands.setContent(activeFile.content, { emitUpdate: false });
-        } else {
-            const text = typeof activeFile.content === 'string' ? activeFile.content : '';
-            const isMarkdown = activeFile.name.endsWith('.md') || activeFile.name.endsWith('.markdown');
-
-            if (isMarkdown) {
-                // Convert [[path|label]] wiki links to HTML spans before TipTap parses
-                const processed = wikiLinksToHTML(text);
-                editor.commands.setContent(processed, { emitUpdate: false });
-            } else {
-                // Plain text - convert to paragraphs
-                const paragraphs = text.split('\n').map(line => ({
-                    type: 'paragraph',
-                    content: line ? [{ type: 'text', text: line }] : [],
-                }));
-                editor.commands.setContent({
-                    type: 'doc',
-                    content: paragraphs.length > 0 ? paragraphs : [{ type: 'paragraph' }],
-                }, { emitUpdate: false });
-            }
-        }
-        // Double rAF: first frame lets TipTap process the new state,
-        // second frame ensures the view's DOM positions are valid for coordsAtPos
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                if (editor && !editor.isDestroyed) {
-                    extractComments(editor);
-                }
             });
         });
     }, [editor, activeFile, activeTabId, activeTab, snapshotTab]);
@@ -503,6 +622,11 @@ const Editor = ({
 
         let cancelled = false;
         const isExternalReload = frameReloadKey > 0;
+
+        // Skip FRAME reloads caused by our own writes (within 3s)
+        if (isExternalReload && recentFrameSaveRef.current && Date.now() - recentFrameSaveRef.current < 3000) {
+            return;
+        }
 
         const loadFrameAnnotations = async () => {
             try {
@@ -672,10 +796,12 @@ const Editor = ({
     };
 
     const handleCommentClick = () => {
+        // Save current selection before showing input (clicking textarea will deselect)
+        const { from, to } = editor.state.selection;
+        savedSelectionRef.current = { from, to };
+
         // Calculate position for input box
-        const { ranges } = editor.state.selection;
-        const fromPos = ranges[0].$from.pos;
-        const coords = editor.view.coordsAtPos(fromPos);
+        const coords = editor.view.coordsAtPos(from);
         const pageRect = pageRef.current?.getBoundingClientRect();
         const relativeTop = coords.top - (pageRect ? pageRect.top : 0);
 
@@ -717,37 +843,48 @@ const Editor = ({
         if (editor && commentText) {
             const commentId = crypto.randomUUID();
 
-            // Compute line number before applying mark
-            const { from } = editor.state.selection;
+            const sel = savedSelectionRef.current;
+            const from = sel ? sel.from : editor.state.selection.from;
+            const to = sel ? sel.to : editor.state.selection.to;
             const lineNumber = posToLineNumber(editor.state.doc, from);
 
-            editor.chain().focus().setMark('comment', { comment: commentText, id: commentId }).run();
+            // Apply comment mark directly via ProseMirror transaction to avoid
+            // focus() restoring a stale/collapsed selection
+            const markType = editor.schema.marks.comment;
+            const mark = markType.create({ comment: commentText, id: commentId });
+            const tr = editor.state.tr.addMark(from, to, mark);
+            editor.view.dispatch(tr);
+
+            savedSelectionRef.current = null;
             setCommentText('');
+            setCommentType('comment');
             setShowCommentInput(false);
             extractComments(editor);
 
             // Sync to FRAME (fire-and-forget)
             if (workspacePath && activeFile?.path) {
+                recentFrameSaveRef.current = Date.now();
                 frameService.addAnnotation(workspacePath, activeFile.path, {
                     id: commentId,
                     line: lineNumber,
                     text: commentText,
-                    type: 'review',
+                    type: commentType,
                     author: 'user',
                 }).catch((err) => {
                     console.warn('Failed to sync comment to FRAME:', err);
                 });
             }
 
-            // Generate and log prompt
-            const prompt = generatePrompt(editor);
-            console.log("AI PROMPT:", prompt);
+            // Generate prompt (available for AI integrations)
+            generatePrompt(editor);
         }
     };
 
     const cancelComment = () => {
         setCommentText('');
+        setCommentType('comment');
         setShowCommentInput(false);
+        savedSelectionRef.current = null;
     };
 
     const resolveComment = (commentId) => {
@@ -770,6 +907,7 @@ const Editor = ({
 
         // Remove from FRAME (fire-and-forget)
         if (workspacePath && activeFile?.path) {
+            recentFrameSaveRef.current = Date.now();
             frameService.removeAnnotation(workspacePath, activeFile.path, commentId).catch((err) => {
                 console.warn('Failed to remove FRAME annotation:', err);
             });
@@ -970,13 +1108,16 @@ const Editor = ({
                 />
             )}
 
-            <div className={cn(
-                "flex-1 flex justify-center items-start overflow-y-auto relative",
-                "py-12 px-16",
-                "max-[1400px]:justify-start max-[1400px]:pl-12",
-                "max-[1200px]:overflow-x-auto max-[1200px]:p-8",
-                "max-[1150px]:py-6 max-[1150px]:px-4",
-            )}>
+            <div
+                ref={editorScrollRef}
+                className={cn(
+                    "flex-1 flex justify-center items-start overflow-y-auto relative",
+                    "py-12 px-16",
+                    "max-[1400px]:justify-start max-[1400px]:pl-12",
+                    "max-[1200px]:overflow-x-auto max-[1200px]:p-8",
+                    "max-[1150px]:py-6 max-[1150px]:px-4",
+                )}
+            >
                 <div
                     className={cn(
                         "w-[816px] min-h-[1056px] bg-page-bg rounded border border-page-border",
@@ -1016,7 +1157,7 @@ const Editor = ({
                     )}
                     {showMenu && (
                         <div
-                            className="flex bg-bg-overlay p-0.5 rounded-lg shadow-lg"
+                            className="flex bg-bg-overlay p-0.5 rounded-lg shadow-lg border border-border"
                             style={{
                                 position: 'fixed',
                                 top: menuPosition.top,
@@ -1028,31 +1169,11 @@ const Editor = ({
                             onMouseDown={(e) => e.preventDefault()}
                         >
                             <button
-                                onClick={() => editor.chain().focus().toggleBold().run()}
-                                className={cn(
-                                    "border-none bg-transparent text-white text-sm font-medium py-1.5 px-2.5 cursor-pointer rounded-md",
-                                    "hover:bg-white/15",
-                                    editor.isActive('bold') && "bg-white/20",
-                                )}
-                            >
-                                Bold
-                            </button>
-                            <button
-                                onClick={() => editor.chain().focus().toggleItalic().run()}
-                                className={cn(
-                                    "border-none bg-transparent text-white text-sm font-medium py-1.5 px-2.5 cursor-pointer rounded-md",
-                                    "hover:bg-white/15",
-                                    editor.isActive('italic') && "bg-white/20",
-                                )}
-                            >
-                                Italic
-                            </button>
-                            <button
                                 onClick={handleCommentClick}
                                 className={cn(
-                                    "border-none bg-transparent text-white text-sm font-medium py-1.5 px-2.5 cursor-pointer rounded-md",
-                                    "hover:bg-white/15",
-                                    editor.isActive('comment') && "bg-white/20",
+                                    "border-none bg-transparent text-text-primary text-sm font-medium py-1.5 px-3 cursor-pointer rounded-md",
+                                    "hover:bg-accent/20",
+                                    editor.isActive('comment') && "bg-accent/20",
                                 )}
                             >
                                 Comment
@@ -1061,11 +1182,13 @@ const Editor = ({
                     )}
                     <div className={editorMode === 'richtext' ? 'editor-richtext' : editorMode === 'obsidian' ? 'editor-obsidian' : 'editor-raw'}>
                         {editorMode === 'raw' ? (
-                            <pre className="whitespace-pre-wrap font-mono text-sm p-4 text-page-text bg-page-bg min-h-full overflow-auto select-text" style={{ fontFamily: 'var(--font-mono)' }}>
-                                {activeFile?.isQuipu && typeof activeFile.content === 'object'
-                                    ? JSON.stringify(activeFile.content, null, 2)
-                                    : editor?.storage?.markdown?.getMarkdown?.() || (typeof activeFile?.content === 'string' ? activeFile.content : '')}
-                            </pre>
+                            <textarea
+                                className="whitespace-pre-wrap font-mono text-sm p-4 text-page-text bg-page-bg w-full overflow-auto resize-none outline-none border-none absolute inset-0"
+                                style={{ fontFamily: 'var(--font-mono)' }}
+                                value={rawContent}
+                                onChange={handleRawContentChange}
+                                spellCheck={false}
+                            />
                         ) : (
                             <EditorContent editor={editor} />
                         )}
@@ -1101,19 +1224,30 @@ const Editor = ({
                                 autoFocus
                                 className="w-full border border-border-focus rounded py-2 px-2 font-[inherit] text-sm resize-y min-h-[60px] outline-none mb-2 text-page-text focus:border-accent focus:shadow-[0_0_0_2px_rgba(196,131,90,0.3)]"
                             />
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    onClick={cancelComment}
-                                    className="py-1.5 px-3 rounded text-[13px] font-medium cursor-pointer border-none bg-transparent text-text-tertiary hover:bg-bg-elevated"
+                            <div className="flex items-center justify-between gap-2">
+                                <select
+                                    value={commentType}
+                                    onChange={(e) => setCommentType(e.target.value)}
+                                    className="text-[11px] bg-bg-elevated border border-border rounded px-1.5 py-1 text-text-secondary outline-none cursor-pointer"
                                 >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={addComment}
-                                    className="py-1.5 px-3 rounded text-[13px] font-medium cursor-pointer border-none bg-accent text-white hover:bg-accent-hover"
-                                >
-                                    Comment
-                                </button>
+                                    {ANNOTATION_TYPES.map(t => (
+                                        <option key={t} value={t}>{t}</option>
+                                    ))}
+                                </select>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={cancelComment}
+                                        className="py-1.5 px-3 rounded text-[13px] font-medium cursor-pointer border-none bg-transparent text-text-tertiary hover:bg-bg-elevated"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={addComment}
+                                        className="py-1.5 px-3 rounded text-[13px] font-medium cursor-pointer border-none bg-accent text-white hover:bg-accent-hover"
+                                    >
+                                        Comment
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -1129,9 +1263,39 @@ const Editor = ({
                             }}
                         >
                             <div className="flex justify-between mb-1 text-xs">
-                                <span className="font-semibold text-page-text">User</span>
+                                <select
+                                    value={c.type || 'comment'}
+                                    onChange={(e) => {
+                                        // Update type in FRAME — Editor comments don't store type on the mark,
+                                        // only in the sidebar display. Update local state + FRAME.
+                                        const newType = e.target.value;
+                                        setComments(prev => prev.map(cm =>
+                                            cm.id === c.id ? { ...cm, type: newType } : cm
+                                        ));
+                                        if (workspacePath && activeFile?.path) {
+                                            frameService.readFrame(workspacePath, activeFile.path).then(frame => {
+                                                if (!frame?.annotations) return;
+                                                const ann = frame.annotations.find(a => a.id === c.id);
+                                                if (ann) {
+                                                    ann.type = newType;
+                                                    frame.updatedAt = new Date().toISOString();
+                                                    const relativePath = activeFile.path.startsWith(workspacePath + '/')
+                                                        ? activeFile.path.substring(workspacePath.length + 1)
+                                                        : activeFile.path;
+                                                    const framePath = `${workspacePath}/.quipu/meta/${relativePath}.frame.json`;
+                                                    recentFrameSaveRef.current = Date.now();
+                                                    fs.writeFile(framePath, JSON.stringify(frame, null, 2));
+                                                }
+                                            }).catch(() => {});
+                                        }
+                                    }}
+                                    className={`px-1 py-0.5 rounded text-[10px] font-medium border-none outline-none cursor-pointer ${TYPE_COLORS[c.type] || TYPE_COLORS.comment}`}
+                                >
+                                    {ANNOTATION_TYPES.map(t => (
+                                        <option key={t} value={t}>{t}</option>
+                                    ))}
+                                </select>
                                 <div className="flex gap-2 items-center">
-                                    <span className="text-text-secondary">Just now</span>
                                     <button
                                         className="border-none bg-transparent text-text-secondary cursor-pointer py-0.5 px-1.5 rounded flex items-center justify-center transition-colors hover:bg-bg-elevated hover:text-page-text"
                                         onClick={() => resolveComment(c.id)}

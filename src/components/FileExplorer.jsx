@@ -65,6 +65,13 @@ function FileTreeItem({ entry, depth = 0 }) {
   const renameRef = useRef(null);
   const createRef = useRef(null);
 
+  // Listen for drag-end cleanup event to clear stuck highlights
+  useEffect(() => {
+    const handleDragCleanup = () => setIsDragOver(false);
+    document.addEventListener('quipu-drag-end', handleDragCleanup);
+    return () => document.removeEventListener('quipu-drag-end', handleDragCleanup);
+  }, []);
+
   const isExpanded = expandedFolders.has(entry.path);
   const isActive = activeFile && activeFile.path === entry.path;
   const isDirtyFile = !entry.isDirectory && openTabs.some(t => t.path === entry.path && t.isDirty);
@@ -207,6 +214,11 @@ function FileTreeItem({ entry, depth = 0 }) {
     e.dataTransfer.effectAllowed = 'move';
   }, [entry.path]);
 
+  const handleDragEnd = useCallback(() => {
+    setIsDragOver(false);
+    document.dispatchEvent(new CustomEvent('quipu-drag-end'));
+  }, []);
+
   const handleDragOver = useCallback((e) => {
     if (!entry.isDirectory) return;
     e.preventDefault();
@@ -244,6 +256,7 @@ function FileTreeItem({ entry, depth = 0 }) {
       <div
         draggable={!isRenaming}
         onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -295,6 +308,7 @@ function FileTreeItem({ entry, depth = 0 }) {
         <div>
           {isCreating && (
             <div className="flex items-center h-[22px] cursor-pointer gap-1 whitespace-nowrap overflow-hidden" style={{ paddingLeft: `${12 + (depth + 1) * 16}px` }}>
+              <span className="shrink-0 w-[14px]" />
               {isCreating === 'folder' ? <FolderIcon size={16} className="shrink-0" /> : <PhFileIcon size={16} className="shrink-0" />}
               <input
                 ref={createRef}
@@ -320,14 +334,64 @@ function FileTreeItem({ entry, depth = 0 }) {
 }
 
 export default function FileExplorer() {
-  const { workspacePath, fileTree, openFolder, refreshDirectory, renameEntry } = useWorkspace();
+  const { workspacePath, fileTree, openFolder, refreshDirectory, renameEntry, createNewFile, createNewFolder } = useWorkspace();
   const [isRootDragOver, setIsRootDragOver] = useState(false);
+  const [rootContextMenu, setRootContextMenu] = useState(null);
+  const [isRootCreating, setIsRootCreating] = useState(null); // 'file' | 'folder' | null
+  const [rootCreateValue, setRootCreateValue] = useState('');
+  const rootCreateRef = useRef(null);
+
+  // Document-level dragend listener to clear all stuck drag highlights
+  useEffect(() => {
+    const handleDragEnd = () => {
+      setIsRootDragOver(false);
+      document.dispatchEvent(new CustomEvent('quipu-drag-end'));
+    };
+    document.addEventListener('dragend', handleDragEnd);
+    return () => document.removeEventListener('dragend', handleDragEnd);
+  }, []);
+
+  useEffect(() => {
+    if (isRootCreating && rootCreateRef.current) {
+      rootCreateRef.current.focus();
+    }
+  }, [isRootCreating]);
 
   const handleRefresh = useCallback(() => {
     if (workspacePath) {
       refreshDirectory(workspacePath);
     }
   }, [workspacePath, refreshDirectory]);
+
+  const handleRootContextMenu = useCallback((e) => {
+    if (!workspacePath) return;
+    // Only show if clicking on empty space (not on a file tree item)
+    if (e.target.closest('[data-context="file-tree-item"]')) return;
+    e.preventDefault();
+    setRootContextMenu({ x: e.clientX, y: e.clientY });
+  }, [workspacePath]);
+
+  const handleRootNewFile = useCallback(() => {
+    setRootContextMenu(null);
+    setIsRootCreating('file');
+  }, []);
+
+  const handleRootNewFolder = useCallback(() => {
+    setRootContextMenu(null);
+    setIsRootCreating('folder');
+  }, []);
+
+  const handleRootCreateSubmit = useCallback(async () => {
+    if (rootCreateValue && workspacePath) {
+      if (isRootCreating === 'file') {
+        await createNewFile(workspacePath, rootCreateValue);
+      } else {
+        await createNewFolder(workspacePath, rootCreateValue);
+      }
+    }
+    setIsRootCreating(null);
+    setRootCreateValue('');
+  }, [rootCreateValue, isRootCreating, workspacePath, createNewFile, createNewFolder]);
 
   const handleRootDragOver = useCallback((e) => {
     e.preventDefault();
@@ -396,10 +460,39 @@ export default function FileExplorer() {
             onDragOver={handleRootDragOver}
             onDragLeave={handleRootDragLeave}
             onDrop={handleRootDrop}
+            onContextMenu={handleRootContextMenu}
           >
+            {isRootCreating && (
+              <div className="flex items-center h-[22px] cursor-pointer gap-1 whitespace-nowrap overflow-hidden" style={{ paddingLeft: '12px' }}>
+                {isRootCreating === 'folder' ? <FolderIcon size={16} className="shrink-0" /> : <PhFileIcon size={16} className="shrink-0" />}
+                <input
+                  ref={rootCreateRef}
+                  className="bg-bg-elevated border border-accent text-text-primary text-[13px] font-[inherit] px-1 h-[18px] flex-1 outline-none rounded-none"
+                  value={rootCreateValue}
+                  placeholder={isRootCreating === 'file' ? 'filename' : 'folder name'}
+                  onChange={(e) => setRootCreateValue(e.target.value)}
+                  onBlur={handleRootCreateSubmit}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleRootCreateSubmit();
+                    if (e.key === 'Escape') { setIsRootCreating(null); setRootCreateValue(''); }
+                  }}
+                />
+              </div>
+            )}
             {fileTree.map((entry) => (
               <FileTreeItem key={entry.path} entry={entry} depth={0} />
             ))}
+
+            {rootContextMenu && (
+              <ContextMenu
+                items={[
+                  { label: 'New File', onClick: handleRootNewFile },
+                  { label: 'New Folder', onClick: handleRootNewFolder },
+                ]}
+                position={{ x: rootContextMenu.x, y: rootContextMenu.y }}
+                onClose={() => setRootContextMenu(null)}
+              />
+            )}
           </div>
         </div>
       )}

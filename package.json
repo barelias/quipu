@@ -1,7 +1,7 @@
 {
   "name": "quipu_simple",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A web-based code editor with rich text, terminal, and git support",
   "author": {
     "name": "barelias",
@@ -25,9 +25,11 @@
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.0",
+    "@monaco-editor/react": "^4.7.0",
     "@phosphor-icons/react": "^2.1.10",
     "@tailwindcss/vite": "^4.2.1",
     "@tiptap/extension-bubble-menu": "^3.15.3",
+    "@tiptap/extension-code-block-lowlight": "^3.22.1",
     "@tiptap/extension-highlight": "^3.15.3",
     "@tiptap/extension-image": "^3.15.3",
     "@tiptap/extension-placeholder": "^3.15.3",
@@ -44,6 +46,7 @@
     "clsx": "^2.1.1",
     "highlight.js": "^11.11.1",
     "js-yaml": "^4.1.1",
+    "lowlight": "^3.3.0",
     "mermaid": "^11.14.0",
     "node-pty": "^1.1.0",
     "radix-ui": "^1.4.3",
