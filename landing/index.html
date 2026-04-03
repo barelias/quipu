@@ -87,7 +87,7 @@
             <span class="dot dot-minimize"></span>
             <span class="dot dot-maximize"></span>
           </div>
-          <div class="mockup-title">notes.md &mdash; Quipu</div>
+          <div class="mockup-title">project-proposal.md &mdash; Quipu</div>
           <div class="mockup-dots" style="visibility: hidden">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
           </div>
@@ -108,64 +108,79 @@
             <div class="sidebar-header">EXPLORER</div>
             <div class="sidebar-item sidebar-folder">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
-              src
-            </div>
-            <div class="sidebar-item sidebar-nested">App.jsx</div>
-            <div class="sidebar-item sidebar-nested sidebar-active">Editor.jsx</div>
-            <div class="sidebar-item sidebar-nested">Terminal.jsx</div>
-            <div class="sidebar-item sidebar-folder">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
               docs
             </div>
-            <div class="sidebar-item sidebar-file sidebar-active">
+            <div class="sidebar-item sidebar-nested sidebar-active">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-              notes.md
+              project-proposal.md
+            </div>
+            <div class="sidebar-item sidebar-nested">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+              meeting-notes.md
+            </div>
+            <div class="sidebar-item sidebar-nested">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+              reference-paper.pdf
+            </div>
+            <div class="sidebar-item sidebar-folder">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>
+              research
+            </div>
+            <div class="sidebar-item sidebar-nested">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+              literature-review.md
             </div>
             <div class="sidebar-item sidebar-file">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-              README.md
+              Home.md
             </div>
           </div>
           <div class="mockup-main">
             <div class="mockup-tabs">
-              <div class="tab tab-active">notes.md</div>
-              <div class="tab">Editor.jsx</div>
+              <div class="tab tab-active">project-proposal.md</div>
+              <div class="tab">reference-paper.pdf</div>
             </div>
-            <div class="mockup-editor">
-              <div class="editor-line">
-                <span class="ed-h1"># Project Notes</span>
+            <div class="mockup-editor mockup-editor-with-comment">
+              <div class="mockup-editor-content">
+                <div class="editor-line">
+                  <span class="ed-h1-rendered">Project Proposal</span>
+                </div>
+                <div class="editor-line">&nbsp;</div>
+                <div class="editor-line">
+                  <span class="ed-text">The migration should replace the existing REST endpoints with a GraphQL layer, reducing round-trips and giving clients control over response shape.</span>
+                </div>
+                <div class="editor-line">&nbsp;</div>
+                <div class="editor-line">
+                  <span class="ed-text">We estimate </span><span class="ed-comment-highlight">3 sprints for the full migration, including backward-compatible shims</span><span class="ed-text"> for legacy consumers.</span>
+                </div>
+                <div class="editor-line">&nbsp;</div>
+                <div class="editor-line">
+                  <span class="ed-h2-rendered">Dual routing: development vs production</span>
+                </div>
+                <div class="editor-line">&nbsp;</div>
+                <div class="editor-line">
+                  <span class="ed-text">Phase 1 will run parallel stacks &mdash; both REST and GraphQL serving production traffic simultaneously.</span>
+                </div>
+                <div class="editor-line editor-cursor">&nbsp;</div>
               </div>
-              <div class="editor-line">&nbsp;</div>
-              <div class="editor-line">
-                <span class="ed-text">The new comment system works well.</span>
-                <span class="ed-comment" data-comment="Should we add threading?">inline comments</span>
-                <span class="ed-text"> make</span>
+              <div class="mockup-comment-sidebar">
+                <div class="mockup-comment-card">
+                  <div class="mockup-comment-meta">You &middot; Just now</div>
+                  <div class="mockup-comment-body">This estimate feels optimistic. Check with backend team on auth token migration complexity.</div>
+                  <div class="mockup-comment-quote">&ldquo;3 sprints for the full migration...&rdquo;</div>
+                </div>
               </div>
-              <div class="editor-line">
-                <span class="ed-text">it easy to annotate any part of a document.</span>
-              </div>
-              <div class="editor-line">&nbsp;</div>
-              <div class="editor-line">
-                <span class="ed-h2">## Next steps</span>
-              </div>
-              <div class="editor-line">&nbsp;</div>
-              <div class="editor-line">
-                <span class="ed-list">- </span><span class="ed-text">Ship the landing page</span>
-              </div>
-              <div class="editor-line">
-                <span class="ed-list">- </span><span class="ed-text">Add git integration</span>
-              </div>
-              <div class="editor-line">
-                <span class="ed-list">- </span><span class="ed-text">Publish to </span><span class="ed-code">npm</span>
-              </div>
-              <div class="editor-line editor-cursor">&nbsp;</div>
             </div>
             <div class="mockup-terminal">
               <div class="terminal-header">
                 <span class="terminal-label">TERMINAL</span>
               </div>
               <div class="terminal-body">
-                <div class="term-line"><span class="term-prompt">~/quipu $</span> <span class="term-cmd" id="typed-cmd"></span><span class="term-cursor" id="term-cursor">|</span></div>
+                <div class="term-line"><span class="term-prompt">~/project $</span> claude "<span class="term-frame">/frame</span> fix the comments on <span class="term-file">@docs/project-proposal.md</span>"</div>
+                <div class="term-line">&nbsp;</div>
+                <div class="term-line"><span class="term-dim">Reading FRAME for project-proposal.md...</span></div>
+                <div class="term-line"><span class="term-dim">Found 1 annotation. Updating document.</span></div>
+                <div class="term-line"><span class="term-cmd" id="typed-cmd"></span><span class="term-cursor" id="term-cursor">|</span></div>
               </div>
             </div>
           </div>
@@ -325,43 +340,90 @@
       </div>
 
       <div class="frame-layout anim-fade-up" style="--delay: 0.1s">
-        <!-- Visual: file + frame sidecar -->
-        <div class="frame-visual">
-          <div class="frame-file-pair">
-            <div class="frame-file">
-              <div class="frame-file-header">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                <span>src/App.jsx</span>
+        <!-- Step 1: Document with inline comments -->
+        <div class="frame-steps">
+          <div class="frame-step">
+            <div class="frame-step-label">
+              <span class="frame-step-number">1</span>
+              Annotate your document
+            </div>
+            <div class="frame-mockup">
+              <div class="frame-mockup-titlebar">
+                <div class="frame-mockup-dots">
+                  <span class="dot dot-close"></span>
+                  <span class="dot dot-minimize"></span>
+                  <span class="dot dot-maximize"></span>
+                </div>
+                <span class="frame-mockup-filename">project-proposal.md &mdash; Quipu</span>
               </div>
-              <div class="frame-file-body">
-                <code>function App() {</code>
-                <code>  const [state, setState]</code>
-                <code class="frame-highlighted">  // render sidebar<span class="frame-annotation-dot" title="2 annotations"></span></code>
-                <code>  return &lt;Layout&gt;</code>
-                <code>    ...</code>
+              <div class="frame-mockup-body">
+                <div class="frame-doc">
+                  <div class="frame-doc-title">Project Proposal</div>
+                  <div class="frame-doc-text">The migration should replace the existing REST endpoints with a GraphQL layer, reducing round-trips and giving clients control over response shape.</div>
+                  <div class="frame-doc-text frame-doc-highlighted">
+                    We estimate <strong>3 sprints</strong> for the full migration, including backward-compatible shims for legacy consumers.
+                    <div class="frame-comment-card">
+                      <div class="frame-comment-author">You</div>
+                      <div class="frame-comment-text">This estimate feels optimistic. Check with backend team on auth token migration complexity.</div>
+                    </div>
+                  </div>
+                  <div class="frame-doc-h2">Timeline</div>
+                  <div class="frame-doc-text frame-doc-highlighted">
+                    Phase 1 will run <strong>parallel stacks</strong> &mdash; both REST and GraphQL serving production traffic.
+                    <div class="frame-comment-card">
+                      <div class="frame-comment-author">You</div>
+                      <div class="frame-comment-text">How does this affect the monitoring setup? Need a dashboard for both.</div>
+                    </div>
+                  </div>
+                  <div class="frame-doc-text">Phase 2 deprecates REST after 90 days of stable GraphQL performance.</div>
+                </div>
               </div>
             </div>
-            <div class="frame-arrow">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </div>
+
+          <!-- Arrow between steps -->
+          <div class="frame-step-arrow">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </div>
+
+          <!-- Step 2: Claude processing via /frame -->
+          <div class="frame-step">
+            <div class="frame-step-label">
+              <span class="frame-step-number">2</span>
+              Claude reads your comments with <code>/frame</code>
             </div>
-            <div class="frame-file frame-sidecar">
-              <div class="frame-file-header">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 7h8M8 11h5"/></svg>
-                <span>.quipu/meta/src/App.jsx.frame.json</span>
+            <div class="frame-mockup frame-mockup-dark">
+              <div class="frame-mockup-titlebar frame-mockup-titlebar-dark">
+                <div class="frame-mockup-dots">
+                  <span class="dot dot-close"></span>
+                  <span class="dot dot-minimize"></span>
+                  <span class="dot dot-maximize"></span>
+                </div>
+                <span class="frame-mockup-filename frame-mockup-filename-dark">Terminal</span>
               </div>
-              <div class="frame-file-body frame-json">
-                <code>{</code>
-                <code>  <span class="fj-key">"annotations"</span>: [</code>
-                <code>    { <span class="fj-key">"line"</span>: <span class="fj-num">3</span>,</code>
-                <code>      <span class="fj-key">"text"</span>: <span class="fj-str">"Refactor this"</span> }</code>
-                <code>  ],</code>
-                <code>  <span class="fj-key">"instructions"</span>: <span class="fj-str">"..."</span>,</code>
-                <code>  <span class="fj-key">"history"</span>: [...]</code>
-                <code>}</code>
+              <div class="frame-terminal-body">
+                <div class="frame-term-line"><span class="frame-term-prompt">~/project $</span> claude</div>
+                <div class="frame-term-line"><span class="frame-term-claude">&gt;</span> <span class="frame-term-cmd">/frame project-proposal.md</span></div>
+                <div class="frame-term-line">&nbsp;</div>
+                <div class="frame-term-line"><span class="frame-term-dim">Reading FRAME for project-proposal.md...</span></div>
+                <div class="frame-term-line"><span class="frame-term-dim">Found 2 annotations</span></div>
+                <div class="frame-term-line">&nbsp;</div>
+                <div class="frame-term-line">I see two concerns on this proposal:</div>
+                <div class="frame-term-line">&nbsp;</div>
+                <div class="frame-term-line"><span class="frame-term-accent">1.</span> The 3-sprint estimate &mdash; auth token migration</div>
+                <div class="frame-term-line">&nbsp;&nbsp; typically adds 1&ndash;2 weeks. I'd budget <strong>4 sprints.</strong></div>
+                <div class="frame-term-line">&nbsp;</div>
+                <div class="frame-term-line"><span class="frame-term-accent">2.</span> For parallel-stack monitoring, you'll want a</div>
+                <div class="frame-term-line">&nbsp;&nbsp; split Grafana board comparing latency p99 across</div>
+                <div class="frame-term-line">&nbsp;&nbsp; both stacks. I can draft the dashboard JSON.</div>
+                <div class="frame-term-line">&nbsp;</div>
+                <div class="frame-term-line"><span class="frame-term-dim">Shall I update the proposal with these suggestions?</span></div>
+                <div class="frame-term-cursor"></div>
               </div>
             </div>
           </div>
         </div>
+      </div>
 
         <!-- Explanation -->
         <div class="frame-details">

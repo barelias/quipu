@@ -62,10 +62,14 @@ const CodeViewer = ({ content, fileName, onContentChange }) => {
     return (editableContent || '').split('\n').length;
   }, [editableContent]);
 
-  // Measure gutter width dynamically so textarea paddingLeft matches
+  // Measure where the <pre> content starts so textarea paddingLeft matches exactly
   useLayoutEffect(() => {
-    if (gutterRef.current) {
-      setGutterWidth(gutterRef.current.offsetWidth);
+    if (highlightRef.current) {
+      // offsetLeft gives the pre's left edge relative to the flex container,
+      // plus its own pl-2 padding gives where text content actually starts
+      const pre = highlightRef.current;
+      const paddingLeft = parseFloat(getComputedStyle(pre).paddingLeft) || 0;
+      setGutterWidth(pre.offsetLeft + paddingLeft);
     }
   }, [lineCount]);
 
@@ -169,7 +173,7 @@ const CodeViewer = ({ content, fileName, onContentChange }) => {
               "resize-none outline-none border-none",
               "overflow-auto whitespace-pre",
             )}
-            style={{ paddingLeft: gutterWidth ? `${gutterWidth + 8}px` : '3.5rem', tabSize: 2 }}
+            style={{ paddingLeft: gutterWidth ? `${gutterWidth}px` : '3.5rem', tabSize: 2 }}
           />
         </div>
       </div>
