@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getLanguage, isCodeFile, isMediaFile, isExcalidrawFile, isMermaidFile, isPdfFile, getViewerType } from '../utils/fileTypes';
+import { getLanguage, isCodeFile, isMediaFile, isExcalidrawFile, isMermaidFile, isPdfFile, isNotebookFile, getViewerType } from '../utils/fileTypes';
 
 describe('getLanguage', () => {
   it('returns javascript for .js files', () => {
@@ -72,6 +72,14 @@ describe('special file type checks', () => {
     expect(isPdfFile('document.PDF')).toBe(true);
     expect(isPdfFile('file.txt')).toBe(false);
   });
+
+  it('detects notebook files', () => {
+    expect(isNotebookFile('analysis.ipynb')).toBe(true);
+    expect(isNotebookFile('ANALYSIS.IPYNB')).toBe(true);
+    expect(isNotebookFile('script.py')).toBe(false);
+    expect(isNotebookFile('data.json')).toBe(false);
+    expect(isNotebookFile('notebook.ipynb.bak')).toBe(false);
+  });
 });
 
 describe('getViewerType', () => {
@@ -86,6 +94,15 @@ describe('getViewerType', () => {
 
   it('returns code for code files', () => {
     expect(getViewerType({ name: 'app.js' })).toBe('code');
+    expect(getViewerType({ name: 'data.json' })).toBe('code');
+  });
+
+  it('returns notebook for .ipynb files', () => {
+    expect(getViewerType({ name: 'analysis.ipynb' })).toBe('notebook');
+    expect(getViewerType({ name: 'MODEL.IPYNB' })).toBe('notebook');
+  });
+
+  it('returns code for .json files (not notebook)', () => {
     expect(getViewerType({ name: 'data.json' })).toBe('code');
   });
 
