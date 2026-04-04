@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { pickMime, joinText, truncate, OUTPUT_TRUNCATION_LIMIT } from '../components/notebook/CellOutput';
-import { inferLanguage, joinSource } from '../components/notebook/NotebookCell';
-import { parseNotebook } from '../components/NotebookViewer';
+import { pickMime, joinText, truncate, OUTPUT_TRUNCATION_LIMIT } from '../extensions/notebook/CellOutput';
+import { inferLanguage, joinSource } from '../extensions/notebook/NotebookCell';
+import { parseNotebook } from '../extensions/notebook/NotebookViewer';
 
 // ---------------------------------------------------------------------------
 // CellOutput — pure logic
@@ -112,14 +112,14 @@ describe('parseNotebook', () => {
     expect(result.nbformat).toBe(4);
   });
 
-  it('throws on nbformat 3 (worksheets present)', () => {
+  it('throws on nbformat 3', () => {
     const nb = { nbformat: 3, worksheets: [{ cells: [] }] };
     expect(() => parseNotebook(JSON.stringify(nb))).toThrow('nbformat 3 not supported');
   });
 
-  it('throws on notebooks with nbformat field = 3', () => {
-    const nb = { nbformat: 3, cells: [] };
-    expect(() => parseNotebook(JSON.stringify(nb))).toThrow('nbformat 3 not supported');
+  it('does not throw on notebooks with worksheets key but nbformat 4', () => {
+    const nb = { nbformat: 4, nbformat_minor: 5, cells: [], metadata: {}, worksheets: null };
+    expect(() => parseNotebook(JSON.stringify(nb))).not.toThrow();
   });
 
   it('throws on invalid JSON', () => {

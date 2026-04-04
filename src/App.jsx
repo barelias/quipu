@@ -24,7 +24,7 @@ import { isCodeFile, isExcalidrawFile, isMermaidFile, isNotebookFile } from './u
 import ExcalidrawViewer from './components/ExcalidrawViewer';
 import MermaidViewer from './components/MermaidViewer';
 import PdfViewer from './components/PdfViewer';
-import NotebookViewer from './components/NotebookViewer';
+import NotebookViewer from './extensions/notebook/NotebookViewer';
 
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState(null);

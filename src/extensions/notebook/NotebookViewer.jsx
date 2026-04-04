@@ -1,12 +1,12 @@
-import { useMemo } from 'react';
-import { useToast } from './Toast';
-import NotebookCell, { inferLanguage } from './notebook/NotebookCell';
+import { useEffect, useMemo } from 'react';
+import { useToast } from '../../components/Toast';
+import NotebookCell, { inferLanguage } from './NotebookCell';
 
 function parseNotebook(content) {
   const notebook = JSON.parse(content);
 
-  // nbformat 3 used worksheets[0].cells — not supported
-  if (notebook.nbformat === 3 || notebook.worksheets) {
+  // nbformat 3 stored cells inside worksheets[0].cells
+  if (notebook.nbformat === 3) {
     throw new Error('nbformat 3 not supported — open in Jupyter and save as nbformat 4');
   }
 
@@ -17,7 +17,7 @@ const NotebookViewer = ({ filePath, fileName, content }) => {
   const { showToast } = useToast();
 
   const { notebook, error } = useMemo(() => {
-    if (!content) return { notebook: null, error: 'No content' };
+    if (!content) return { notebook: null, error: null };
     try {
       return { notebook: parseNotebook(content), error: null };
     } catch (err) {
@@ -25,8 +25,8 @@ const NotebookViewer = ({ filePath, fileName, content }) => {
     }
   }, [content]);
 
-  // Surface parse errors as toasts (once per content change via useMemo)
-  useMemo(() => {
+  // Surface parse errors as toasts — useEffect to avoid setState during render
+  useEffect(() => {
     if (error) showToast(error, 'error');
   }, [error, showToast]);
 
