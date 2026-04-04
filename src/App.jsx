@@ -20,10 +20,11 @@ import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ToastProvider, useToast } from './components/Toast';
 import frameService from './services/frameService.js';
 import claudeInstaller from './services/claudeInstaller';
-import { isCodeFile, isExcalidrawFile, isMermaidFile } from './utils/fileTypes';
+import { isCodeFile, isExcalidrawFile, isMermaidFile, isNotebookFile } from './utils/fileTypes';
 import ExcalidrawViewer from './components/ExcalidrawViewer';
 import MermaidViewer from './components/MermaidViewer';
 import PdfViewer from './components/PdfViewer';
+import NotebookViewer from './components/NotebookViewer';
 
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState(null);
@@ -68,7 +69,7 @@ function AppContent() {
       // Check if the NEW active tab will NOT use the Editor component
       const newTab = openTabs.find(t => t.id === activeTabId);
       const isNewTabNonEditor = newTab && (
-        newTab.isPdf || newTab.isMedia ||
+        newTab.isPdf || newTab.isMedia || newTab.isNotebook ||
         isExcalidrawFile(newTab.name) || isMermaidFile(newTab.name) ||
         (isCodeFile(newTab.name) && !newTab.isQuipu)
       );
@@ -248,7 +249,7 @@ function AppContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         if (activeFile) {
-          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name) || window.__quipuEditorRawMode;
+          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name) || isNotebookFile(activeFile.name) || window.__quipuEditorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
       }
@@ -572,7 +573,7 @@ function AppContent() {
     switch (action) {
       case 'file.save':
         if (activeFile) {
-          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name) || window.__quipuEditorRawMode;
+          const isNonTipTap = isExcalidrawFile(activeFile.name) || isCodeFile(activeFile.name) || isMermaidFile(activeFile.name) || isNotebookFile(activeFile.name) || window.__quipuEditorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
         break;
@@ -717,6 +718,8 @@ function AppContent() {
                     />
                   ) : isMermaidFile(activeFile.name) ? (
                     <MermaidViewer content={activeFile.content} fileName={activeFile.name} onContentChange={handleContentChange} />
+                  ) : isNotebookFile(activeFile.name) ? (
+                    <NotebookViewer filePath={activeTab.path} fileName={activeFile.name} content={activeFile.content} />
                   ) : isCodeFile(activeFile.name) && !activeFile.isQuipu ? (
                     <CodeViewer content={activeFile.content} fileName={activeFile.name} onContentChange={handleContentChange} />
                   ) : (

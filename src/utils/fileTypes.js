@@ -54,6 +54,10 @@ export function isPdfFile(fileName) {
   return getFileExtension(fileName) === '.pdf';
 }
 
+export function isNotebookFile(fileName) {
+  return getFileExtension(fileName) === '.ipynb';
+}
+
 export function getViewerType(tab) {
   if (!tab) return null;
   if (tab.isDiff) return 'diff';
@@ -61,6 +65,7 @@ export function getViewerType(tab) {
   if (tab.isQuipu) return 'editor';
   if (isExcalidrawFile(tab.name)) return 'excalidraw';
   if (tab.name.endsWith('.md') || tab.name.endsWith('.markdown')) return 'editor';
+  if (isNotebookFile(tab.name)) return 'notebook';
   if (isCodeFile(tab.name)) return 'code';
   if (isMediaFile(tab.name)) return 'media';
   return 'editor';

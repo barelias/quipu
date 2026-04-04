@@ -6,7 +6,7 @@ import frameService from '../services/frameService';
 import claudeInstaller from '../services/claudeInstaller';
 import storage from '../services/storageService';
 import { useToast } from '../components/Toast';
-import { isCodeFile, isMermaidFile } from '../utils/fileTypes';
+import { isCodeFile, isMermaidFile, isNotebookFile } from '../utils/fileTypes';
 
 const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -507,6 +507,7 @@ export function WorkspaceProvider({ children }) {
         isDirty: false,
         isQuipu: isQuipu && !!parsedContent,
         isMarkdown,
+        isNotebook: isNotebookFile(fileName),
         scrollPosition: 0,
         frontmatter,
         frontmatterRaw,
