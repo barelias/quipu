@@ -1,4 +1,4 @@
-import fs from './fileSystem.js';
+import fs from './fileSystem';
 
 // Template content for FRAME skill
 const FRAME_SKILL = `---
@@ -278,7 +278,28 @@ exit 0
 `;
 
 // Hook configuration to merge into settings.json
-const FRAME_HOOK = {
+interface FrameHookEntry {
+  type: string;
+  command: string;
+  timeout: number;
+}
+
+interface FrameHookConfig {
+  matcher: string;
+  hooks: FrameHookEntry[];
+}
+
+interface ClaudeSettings {
+  hooks?: {
+    PostToolUse?: Array<{
+      matcher: string;
+      hooks?: Array<{ command?: string }>;
+    }>;
+  };
+  [key: string]: unknown;
+}
+
+const FRAME_HOOK: FrameHookConfig = {
   matcher: 'Read',
   hooks: [
     {
@@ -289,16 +310,7 @@ const FRAME_HOOK = {
   ],
 };
 
-async function fileExists(path) {
-  try {
-    await fs.readFile(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function installFrameSkills(workspacePath) {
+async function installFrameSkills(workspacePath: string): Promise<void> {
   if (!workspacePath) return;
 
   const claudeDir = workspacePath + '/.claude';
@@ -325,12 +337,12 @@ async function installFrameSkills(workspacePath) {
 
   // Merge settings.json (add hook if not present)
   const settingsPath = claudeDir + '/settings.json';
-  let settings = {};
+  let settings: ClaudeSettings = {};
   let existingContent = '';
 
   try {
     existingContent = await fs.readFile(settingsPath);
-    settings = JSON.parse(existingContent);
+    settings = JSON.parse(existingContent) as ClaudeSettings;
   } catch {
     // If file exists but has invalid JSON, don't overwrite it
     if (existingContent && existingContent.trim()) {
@@ -359,7 +371,11 @@ async function installFrameSkills(workspacePath) {
   }
 }
 
-const claudeInstaller = {
+export interface ClaudeInstallerService {
+  installFrameSkills: (workspacePath: string) => Promise<void>;
+}
+
+const claudeInstaller: ClaudeInstallerService = {
   installFrameSkills,
 };
 

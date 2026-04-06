@@ -11,7 +11,7 @@ const MEDIA_EXTENSIONS = new Set([
   '.mp4', '.webm', '.ogg', '.mov',
 ]);
 
-const EXT_TO_LANG = {
+const EXT_TO_LANG: Record<string, string> = {
   '.js': 'javascript', '.jsx': 'javascript', '.cjs': 'javascript', '.mjs': 'javascript',
   '.ts': 'typescript', '.tsx': 'typescript',
   '.json': 'json', '.css': 'css', '.scss': 'scss', '.less': 'less',
@@ -23,42 +23,51 @@ const EXT_TO_LANG = {
   '.sql': 'sql', '.rb': 'ruby', '.php': 'php',
 };
 
-export function getFileExtension(fileName) {
+export function getFileExtension(fileName: string): string {
   const lastDot = fileName.lastIndexOf('.');
   return lastDot >= 0 ? fileName.substring(lastDot).toLowerCase() : '';
 }
 
-export function isCodeFile(fileName) {
+export function isCodeFile(fileName: string): boolean {
   return CODE_EXTENSIONS.has(getFileExtension(fileName));
 }
 
-export function isMediaFile(fileName) {
+export function isMediaFile(fileName: string): boolean {
   return MEDIA_EXTENSIONS.has(getFileExtension(fileName));
 }
 
-export function getLanguage(fileName) {
+export function getLanguage(fileName: string): string | null {
   return EXT_TO_LANG[getFileExtension(fileName)] || null;
 }
 
-export function isExcalidrawFile(fileName) {
+export function isExcalidrawFile(fileName: string): boolean {
   return fileName.endsWith('.excalidraw');
 }
 
 const MERMAID_EXTENSIONS = new Set(['.mmd', '.mermaid']);
 
-export function isMermaidFile(fileName) {
+export function isMermaidFile(fileName: string): boolean {
   return MERMAID_EXTENSIONS.has(getFileExtension(fileName));
 }
 
-export function isPdfFile(fileName) {
+export function isPdfFile(fileName: string): boolean {
   return getFileExtension(fileName) === '.pdf';
 }
 
-export function isNotebookFile(fileName) {
+export function isNotebookFile(fileName: string): boolean {
   return getFileExtension(fileName) === '.ipynb';
 }
 
-export function getViewerType(tab) {
+export interface ViewerTab {
+  name: string;
+  isDiff?: boolean;
+  isMedia?: boolean;
+  isQuipu?: boolean;
+}
+
+export type ViewerType = 'diff' | 'media' | 'editor' | 'excalidraw' | 'notebook' | 'code' | null;
+
+export function getViewerType(tab: ViewerTab | null): ViewerType {
   if (!tab) return null;
   if (tab.isDiff) return 'diff';
   if (tab.isMedia) return 'media';

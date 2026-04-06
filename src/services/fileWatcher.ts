@@ -1,34 +1,45 @@
 import { WS_URL } from '../config.js';
 
-function isElectron() {
+function isElectron(): boolean {
   return !!(window.electronAPI && window.electronAPI.watchDirectory);
 }
 
+export interface FileWatcherEvent {
+  type: string;
+  path?: string;
+}
+
+export interface FileWatcherService {
+  watch: (dirPath: string) => Promise<{ success: boolean } | null>;
+  onChanged: (callback: (event: FileWatcherEvent) => void) => () => void;
+  unwatch: () => Promise<{ success: boolean } | null>;
+}
+
 // Electron: delegates to IPC-based fs.watch in the main process
-const electronWatcher = {
-  watch: (dirPath) => {
-    return window.electronAPI.watchDirectory(dirPath);
+const electronWatcher: FileWatcherService = {
+  watch: (dirPath: string) => {
+    return window.electronAPI!.watchDirectory(dirPath);
   },
 
-  onChanged: (callback) => {
-    window.electronAPI.onDirectoryChanged(callback);
-    return () => window.electronAPI.removeDirectoryListener();
+  onChanged: (callback: (event: FileWatcherEvent) => void) => {
+    window.electronAPI!.onDirectoryChanged(callback);
+    return () => window.electronAPI!.removeDirectoryListener();
   },
 
   unwatch: () => {
     // Electron watcher is replaced on next watch() call; no explicit unwatch needed
-    return window.electronAPI.watchDirectory(null);
+    return window.electronAPI!.watchDirectory(null);
   },
 };
 
 // Browser: connects to Go server's /watch WebSocket endpoint
-function createBrowserWatcher() {
-  let ws = null;
-  let listeners = [];
-  let reconnectTimer = null;
-  let currentDir = null;
+function createBrowserWatcher(): FileWatcherService {
+  let ws: WebSocket | null = null;
+  let listeners: Array<(event: FileWatcherEvent) => void> = [];
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentDir: string | null = null;
 
-  function connect(dirPath) {
+  function connect(dirPath: string): void {
     cleanup();
     currentDir = dirPath;
 
@@ -39,9 +50,9 @@ function createBrowserWatcher() {
       return;
     }
 
-    ws.onmessage = (event) => {
+    ws.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data);
+        const data: FileWatcherEvent = JSON.parse(event.data as string);
         listeners.forEach(cb => cb(data));
       } catch {
         // Ignore malformed messages
@@ -51,7 +62,7 @@ function createBrowserWatcher() {
     ws.onclose = () => {
       // Attempt reconnect after 5 seconds if we still have a target dir
       if (currentDir) {
-        reconnectTimer = setTimeout(() => connect(currentDir), 5000);
+        reconnectTimer = setTimeout(() => connect(currentDir!), 5000);
       }
     };
 
@@ -60,7 +71,7 @@ function createBrowserWatcher() {
     };
   }
 
-  function cleanup() {
+  function cleanup(): void {
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -73,12 +84,12 @@ function createBrowserWatcher() {
   }
 
   return {
-    watch: (dirPath) => {
+    watch: (dirPath: string) => {
       connect(dirPath);
       return Promise.resolve({ success: true });
     },
 
-    onChanged: (callback) => {
+    onChanged: (callback: (event: FileWatcherEvent) => void) => {
       listeners.push(callback);
       return () => {
         listeners = listeners.filter(cb => cb !== callback);
@@ -94,6 +105,6 @@ function createBrowserWatcher() {
   };
 }
 
-const fileWatcher = isElectron() ? electronWatcher : createBrowserWatcher();
+const fileWatcher: FileWatcherService = isElectron() ? electronWatcher : createBrowserWatcher();
 
 export default fileWatcher;
