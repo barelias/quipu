@@ -12,7 +12,8 @@ export interface ExtensionDescriptor {
   id: string;
   canHandle: (tab: Tab, activeFile: ActiveFile | null) => boolean;
   priority: number;
-  component: ComponentType<Record<string, unknown>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  component: ComponentType<any>;
   commands?: ExtensionCommand[];
   onSave?: (tab: Tab, editorInstance: Editor | null) => Promise<string | null>;
   onSnapshot?: (tab: Tab, editorInstance: Editor | null) => unknown;
