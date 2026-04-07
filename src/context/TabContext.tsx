@@ -4,7 +4,7 @@ import fs from '../services/fileSystem';
 import fileWatcher from '../services/fileWatcher';
 import frameService from '../services/frameService';
 import storage from '../services/storageService';
-import { useToast } from '../components/Toast';
+import { useToast } from '../components/ui/Toast';
 import { isCodeFile, isMermaidFile, isNotebookFile } from '../utils/fileTypes';
 import { useFileSystem } from './FileSystemContext';
 import type { Tab, ActiveFile, Frontmatter } from '../types/tab';

@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../context/WorkspaceContext';
-import searchService from '../services/searchService';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import searchService from '../../services/searchService';
 
 interface SearchMatch {
   file: string;

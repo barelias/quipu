@@ -2,7 +2,7 @@ import React from 'react';
 import { FilesIcon, MagnifyingGlassIcon, GitBranchIcon } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../context/WorkspaceContext';
+import { useWorkspace } from '../../context/WorkspaceContext';
 
 type PanelId = 'explorer' | 'search' | 'git';
 

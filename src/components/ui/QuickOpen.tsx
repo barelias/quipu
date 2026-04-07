@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../context/WorkspaceContext';
-import searchService from '../services/searchService';
-import { commands } from '../data/commands';
-import type { Command } from '../data/commands';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import searchService from '../../services/searchService';
+import { commands } from '../../data/commands';
+import type { Command } from '../../data/commands';
 
 interface FileEntry {
   name: string;

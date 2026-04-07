@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { CaretRight } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { menus } from '../data/commands';
-import type { MenuItem } from '../data/commands';
-import { useWorkspace } from '../context/WorkspaceContext';
-import type { RecentWorkspace } from '../types/workspace';
+import { menus } from '../../data/commands';
+import type { MenuItem } from '../../data/commands';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import type { RecentWorkspace } from '../../types/workspace';
 
 interface MenuBarProps {
   onAction: (action: string) => void;

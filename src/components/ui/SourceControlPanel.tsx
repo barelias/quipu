@@ -5,9 +5,9 @@ import {
   GearIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../context/WorkspaceContext';
-import { useToast } from '../components/Toast';
-import gitService from '../services/gitService';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import { useToast } from './Toast';
+import gitService from '../../services/gitService';
 
 type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | '?';
 

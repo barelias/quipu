@@ -6,8 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CaretRight, CaretDown, X, Plus } from '@phosphor-icons/react';
-import { useToast } from './Toast';
-import type { Frontmatter } from '../types/tab';
+import { useToast } from '../ui/Toast';
+import type { Frontmatter } from '../../types/tab';
 
 interface TagEditorProps {
   tags: unknown[];

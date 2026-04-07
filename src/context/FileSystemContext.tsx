@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import fs from '../services/fileSystem';
 import claudeInstaller from '../services/claudeInstaller';
 import storage from '../services/storageService';
-import { useToast } from '../components/Toast';
+import { useToast } from '../components/ui/Toast';
 import type { FileTreeEntry, RecentWorkspace } from '../types/workspace';
 
 export interface FileSystemContextValue {

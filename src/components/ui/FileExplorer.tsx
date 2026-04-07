@@ -5,9 +5,9 @@ import {
   FileCodeIcon, FileMdIcon, FileTextIcon, ArrowClockwiseIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../context/WorkspaceContext';
+import { useWorkspace } from '../../context/WorkspaceContext';
 import ContextMenu from './ContextMenu';
-import type { FileTreeEntry } from '../types/workspace';
+import type { FileTreeEntry } from '../../types/workspace';
 
 type PhosphorIconComponent = typeof PhFileIcon;
 

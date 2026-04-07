@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { wikiLinksToHTML } from '../extensions/WikiLink';
+import { wikiLinksToHTML } from '../components/editor/extensions/WikiLink';
 
 describe('wikiLinksToHTML', () => {
   it('converts simple [[path]] to HTML span', () => {

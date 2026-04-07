@@ -12,12 +12,12 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { PlusIcon, XIcon, MagnifyingGlassIcon, ArrowUpIcon, ArrowDownIcon, TerminalWindowIcon } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import { useWorkspace } from "../context/WorkspaceContext";
+import { useWorkspace } from "../../context/WorkspaceContext";
 import { useToast } from "./Toast";
-import terminalService, { isElectron } from "../services/terminalService";
-import { WS_URL } from "../config.js";
+import terminalService, { isElectron } from "../../services/terminalService";
+import { WS_URL } from "../../config.js";
 import "@xterm/xterm/css/xterm.css";
-import type { TerminalTab } from "../types/editor";
+import type { TerminalTab } from "../../types/editor";
 
 interface TerminalInstance {
   xterm: XTerm;

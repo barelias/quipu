@@ -3,7 +3,7 @@ import {
   FolderOpenIcon, CircleIcon, WarningIcon,
   PlayIcon, SquareIcon, ArrowClockwiseIcon,
 } from '@phosphor-icons/react';
-import { useToast } from '../../components/Toast';
+import { useToast } from '../../components/ui/Toast';
 import kernelService, { isElectron } from '../../services/kernelService';
 import type { KernelSession } from '../../services/kernelService';
 import NotebookCell, { inferLanguage, joinSource } from './NotebookCell';

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { XIcon, CaretRightIcon } from '@phosphor-icons/react';
-import fs from '../services/fileSystem';
+import fs from '../../services/fileSystem';
 
 interface DirectoryEntry {
   name: string;

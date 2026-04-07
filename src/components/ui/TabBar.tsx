@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react';
 import { XIcon, CircleIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../context/WorkspaceContext';
+import { useWorkspace } from '../../context/WorkspaceContext';
 
 interface Tab {
     id: string;

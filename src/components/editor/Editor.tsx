@@ -20,16 +20,16 @@ import { TableRow } from '@tiptap/extension-table-row';
 import { TableHeader } from '@tiptap/extension-table-header';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { Markdown } from 'tiptap-markdown';
-import { RevealMarkdown } from '../extensions/RevealMarkdown';
-import { BlockDragHandle } from '../extensions/BlockDragHandle';
-import { FindReplace } from '../extensions/FindReplace';
-import { WikiLink, wikiLinksToHTML } from '../extensions/WikiLink';
-import { CodeBlockWithLang } from '../extensions/CodeBlockWithLang';
+import { RevealMarkdown } from './extensions/RevealMarkdown';
+import { BlockDragHandle } from './extensions/BlockDragHandle';
+import { FindReplace } from './extensions/FindReplace';
+import { WikiLink, wikiLinksToHTML } from './extensions/WikiLink';
+import { CodeBlockWithLang } from './extensions/CodeBlockWithLang';
 import FindBar from './FindBar';
 import FrontmatterProperties from './FrontmatterProperties';
-import frameService from '../services/frameService.js';
-import fs from '../services/fileSystem.js';
-import type { Tab } from '../types/tab';
+import frameService from '../../services/frameService';
+import fs from '../../services/fileSystem';
+import type { Tab } from '../../types/tab';
 
 // ---------- Local types ----------
 

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { useToast } from '@/components/Toast';
+import { useToast } from '@/components/ui/Toast';
 import type { TerminalTab } from '@/types/editor';
 
 const MAX_TERMINALS = 5;
