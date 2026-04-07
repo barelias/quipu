@@ -31,15 +31,6 @@ import frameService from '../services/frameService.js';
 import fs from '../services/fileSystem.js';
 import type { Tab } from '../types/tab';
 
-// ---------- declare global window extensions ----------
-declare global {
-    interface Window {
-        __quipuEditorRawMode?: boolean;
-        __quipuToggleEditorMode?: () => void;
-        __quipuToggleFind?: () => void;
-    }
-}
-
 // ---------- Local types ----------
 
 type EditorMode = 'richtext' | 'obsidian' | 'raw';
@@ -81,6 +72,9 @@ interface ToolbarButtonProps {
 interface EditorProps {
     onEditorReady: (editor: TiptapEditor) => void;
     onContentChange: (rawContent?: string) => void;
+    onRawModeChange: (isRaw: boolean) => void;
+    onToggleEditorModeRef: React.MutableRefObject<(() => void) | null>;
+    onToggleFindRef: React.MutableRefObject<(() => void) | null>;
     activeFile: { path: string; name: string; content: string | JSONContent | null; isQuipu: boolean } | null;
     activeTabId: string | null;
     activeTab: Tab | null;
@@ -139,7 +133,8 @@ const ToolbarButton: React.FC<ToolbarButtonProps> = ({ onClick, isActive, title,
 const ToolbarSeparator: React.FC = () => <div className="editor-toolbar-separator" />;
 
 const Editor: React.FC<EditorProps> = ({
-    onEditorReady, onContentChange, activeFile, activeTabId, activeTab, snapshotTab,
+    onEditorReady, onContentChange, onRawModeChange, onToggleEditorModeRef, onToggleFindRef,
+    activeFile, activeTabId, activeTab, snapshotTab,
     workspacePath, openFile, revealFolder,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
@@ -235,11 +230,10 @@ const Editor: React.FC<EditorProps> = ({
         }
     }, [editorMode, activeFile?.path]);
 
-    // Expose raw mode flag for save logic
+    // Notify parent of raw mode changes for save logic
     useEffect(() => {
-        window.__quipuEditorRawMode = editorMode === 'raw';
-        return () => { delete window.__quipuEditorRawMode; };
-    }, [editorMode]);
+        onRawModeChange(editorMode === 'raw');
+    }, [editorMode, onRawModeChange]);
 
     const handleRawContentChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
         const value = e.target.value;
@@ -249,17 +243,17 @@ const Editor: React.FC<EditorProps> = ({
         }
     }, [onContentChange]);
 
-    // Expose toggleEditorMode for command palette (editor.toggleMode action)
+    // Register toggleEditorMode callback with parent via ref
     useEffect(() => {
-        window.__quipuToggleEditorMode = toggleEditorMode;
-        return () => { delete window.__quipuToggleEditorMode; };
-    }, [toggleEditorMode]);
+        onToggleEditorModeRef.current = toggleEditorMode;
+        return () => { onToggleEditorModeRef.current = null; };
+    }, [toggleEditorMode, onToggleEditorModeRef]);
 
-    // Expose find bar toggle for App.jsx keyboard shortcut
+    // Register find bar toggle callback with parent via ref
     useEffect(() => {
-        window.__quipuToggleFind = () => setShowFindBar(prev => !prev);
-        return () => { delete window.__quipuToggleFind; };
-    }, []);
+        onToggleFindRef.current = () => setShowFindBar(prev => !prev);
+        return () => { onToggleFindRef.current = null; };
+    }, [onToggleFindRef]);
 
     // Document zoom: 75%-200%, persisted in localStorage, independent of window zoom
     const ZOOM_MIN = 75;

@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { IconContext } from '@phosphor-icons/react';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import type { Editor } from '@tiptap/react';
-import type { ComponentType } from 'react';
 import Editor_ from './components/Editor';
 import Terminal from './components/Terminal';
 import FileExplorer from './components/FileExplorer';
@@ -23,7 +22,7 @@ import claudeInstaller from './services/claudeInstaller';
 import DiffViewer from './extensions/diff-viewer/DiffViewer.js';
 import { resolveViewer } from './extensions/registry';
 import './extensions'; // register all viewer extensions
-import type { Tab, ActiveFile } from './types/tab';
+import type { ActiveFile } from './types/tab';
 
 interface ContextMenuItem {
   label?: string;
@@ -45,16 +44,11 @@ interface ActiveDiff {
   isStaged: boolean;
 }
 
-declare global {
-  interface Window {
-    __quipuEditorRawMode?: boolean;
-    __quipuToggleFind?: () => void;
-    __quipuToggleEditorMode?: () => void;
-  }
-}
-
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
+  const [editorRawMode, setEditorRawMode] = useState<boolean>(false);
+  const toggleEditorModeRef = React.useRef<(() => void) | null>(null);
+  const toggleFindRef = React.useRef<(() => void) | null>(null);
   const {
     activeFile, saveFile, setIsDirty, updateTabContent, showFolderPicker, selectFolder, cancelFolderPicker, openFile,
     activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
@@ -263,7 +257,7 @@ function AppContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         if (activeFile && activeTab) {
-          const isNonTipTap = resolveViewer(activeTab, activeFile) !== null || window.__quipuEditorRawMode;
+          const isNonTipTap = resolveViewer(activeTab, activeFile) !== null || editorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
       }
@@ -337,7 +331,7 @@ function AppContent() {
       }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'f') {
         e.preventDefault();
-        window.__quipuToggleFind?.();
+        toggleFindRef.current?.();
       }
     };
     document.addEventListener('keydown', handler);
@@ -586,7 +580,7 @@ function AppContent() {
     switch (action) {
       case 'file.save':
         if (activeFile && activeTab) {
-          const isNonTipTap = resolveViewer(activeTab, activeFile) !== null || window.__quipuEditorRawMode;
+          const isNonTipTap = resolveViewer(activeTab, activeFile) !== null || editorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
         break;
@@ -648,7 +642,7 @@ function AppContent() {
         handleSendToClaude();
         break;
       case 'editor.toggleMode':
-        window.__quipuToggleEditorMode?.();
+        toggleEditorModeRef.current?.();
         break;
       case 'kernel.runAll':
       case 'kernel.interrupt':
@@ -732,6 +726,9 @@ function AppContent() {
                       <Editor_
                         onEditorReady={handleEditorReady}
                         onContentChange={handleContentChange}
+                        onRawModeChange={setEditorRawMode}
+                        onToggleEditorModeRef={toggleEditorModeRef}
+                        onToggleFindRef={toggleFindRef}
                         activeFile={activeFile}
                         activeTabId={activeTabId}
                         activeTab={activeTab}
