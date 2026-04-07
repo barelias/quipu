@@ -5,7 +5,6 @@ import type { Editor } from '@tiptap/react';
 import type { ComponentType } from 'react';
 import Editor_ from './components/Editor';
 import Terminal from './components/Terminal';
-import type { TerminalHandle } from './components/Terminal';
 import FileExplorer from './components/FileExplorer';
 import FolderPicker from './components/FolderPicker';
 import TabBar from './components/TabBar';
@@ -17,6 +16,7 @@ import TitleBar from './components/TitleBar';
 import ContextMenu from './components/ContextMenu';
 import FileConflictBar from './components/FileConflictBar';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
+import { useTerminal } from './context/TerminalContext';
 import { ToastProvider, useToast } from './components/Toast';
 import frameService from './services/frameService.js';
 import claudeInstaller from './services/claudeInstaller';
@@ -47,7 +47,6 @@ interface ActiveDiff {
 
 declare global {
   interface Window {
-    __quipuTerminalRef?: React.RefObject<TerminalHandle | null>;
     __quipuEditorRawMode?: boolean;
     __quipuToggleFind?: () => void;
     __quipuToggleEditorMode?: () => void;
@@ -56,7 +55,6 @@ declare global {
 
 function AppContent() {
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
-  const terminalRef = React.useRef<TerminalHandle | null>(null);
   const {
     activeFile, saveFile, setIsDirty, updateTabContent, showFolderPicker, selectFolder, cancelFolderPicker, openFile,
     activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
@@ -64,10 +62,14 @@ function AppContent() {
     renameFrontmatterKey, toggleFrontmatterCollapsed,
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
     workspacePath, revealFolder,
-    terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
     resolveConflictReload, resolveConflictKeep, resolveConflictDismiss,
     reloadTabFromDisk,
   } = useWorkspace();
+  const {
+    terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
+    sendToTerminal, clearTerminal, getTerminalSelection, hasTerminalSelection,
+    pasteToTerminal, focusTerminal,
+  } = useTerminal();
   const { showToast } = useToast();
   type PanelId = 'explorer' | 'search' | 'git';
   const [activePanel, setActivePanel] = useState<PanelId | null>('explorer');
@@ -78,12 +80,6 @@ function AppContent() {
   // Derive isClaudeRunning from the active terminal tab
   const activeTerminalTab = terminalTabs.find(t => t.id === activeTerminalId);
   const isClaudeRunning = activeTerminalTab?.isClaudeRunning ?? false;
-
-  // Expose terminal ref globally for context menu access
-  useEffect(() => {
-    window.__quipuTerminalRef = terminalRef;
-    return () => { delete window.__quipuTerminalRef; };
-  }, []);
 
   // Snapshot the TipTap editor content before switching away to a non-Editor viewer (e.g., PDF)
   // Uses a ref + callback approach instead of useEffect to avoid race conditions
@@ -171,10 +167,6 @@ function AppContent() {
       showToast('No file open to send to Claude', 'warning');
       return;
     }
-    if (!terminalRef.current) {
-      showToast('Terminal not connected', 'error');
-      return;
-    }
 
     // Auto-save if dirty
     if (editorInstance && activeTab?.isDirty) {
@@ -196,26 +188,22 @@ function AppContent() {
     const relativePath = activeFile.path.replace(workspacePath + '/', '');
     const command = `/frame ${relativePath}`;
 
-    terminalRef.current.focus();
+    focusTerminal();
 
     if (isClaudeRunning) {
-      terminalRef.current.write(command + "\n");
+      sendToTerminal(command + "\n");
     } else {
-      terminalRef.current.write("claude\n");
+      sendToTerminal("claude\n");
       if (activeTerminalId) setTerminalClaudeRunning(activeTerminalId, true);
       setTimeout(() => {
-        terminalRef.current!.write(command + "\n");
+        sendToTerminal(command + "\n");
       }, 2000);
     }
-  }, [activeFile, workspacePath, editorInstance, activeTab, saveFile, terminalPanelRef, isClaudeRunning, activeTerminalId, setTerminalClaudeRunning, showToast]);
+  }, [activeFile, workspacePath, editorInstance, activeTab, saveFile, terminalPanelRef, isClaudeRunning, activeTerminalId, setTerminalClaudeRunning, showToast, focusTerminal, sendToTerminal]);
 
   const handleSendToClaude = useCallback(async () => {
     if (!activeFile || !workspacePath) {
       showToast('No file open to send to Claude', 'warning');
-      return;
-    }
-    if (!terminalRef.current) {
-      showToast('Terminal not connected', 'error');
       return;
     }
 
@@ -249,18 +237,18 @@ function AppContent() {
       // FRAME read failed — proceed without it
     }
 
-    terminalRef.current.focus();
+    focusTerminal();
 
     if (isClaudeRunning) {
-      terminalRef.current.write(prompt + "\n");
+      sendToTerminal(prompt + "\n");
     } else {
-      terminalRef.current.write("claude\n");
+      sendToTerminal("claude\n");
       if (activeTerminalId) setTerminalClaudeRunning(activeTerminalId, true);
       setTimeout(() => {
-        terminalRef.current!.write(prompt + "\n");
+        sendToTerminal(prompt + "\n");
       }, 2000);
     }
-  }, [activeFile, workspacePath, editorInstance, activeTab, saveFile, terminalPanelRef, isClaudeRunning, activeTerminalId, setTerminalClaudeRunning, showToast]);
+  }, [activeFile, workspacePath, editorInstance, activeTab, saveFile, terminalPanelRef, isClaudeRunning, activeTerminalId, setTerminalClaudeRunning, showToast, focusTerminal, sendToTerminal]);
 
   // Refs to hold latest callback values — avoids TDZ errors caused by
   // esbuild reordering const declarations in the production bundle.
@@ -388,8 +376,7 @@ function AppContent() {
       const hasSelection = selection && selection.toString().trim().length > 0;
 
       // Check for terminal selection
-      const termRef = window.__quipuTerminalRef;
-      const hasTerminalSelection = isTerminal && termRef?.current && typeof termRef.current.hasSelection === 'function' && termRef.current.hasSelection();
+      const hasTermSel = isTerminal && hasTerminalSelection();
 
       // --- Copy when text is selected (always first) ---
       if (hasSelection && !isTerminal) {
@@ -403,8 +390,8 @@ function AppContent() {
         });
       }
 
-      if (hasTerminalSelection) {
-        const terminalText = termRef!.current!.getSelection();
+      if (hasTermSel) {
+        const terminalText = getTerminalSelection();
         items.push({
           label: 'Copy',
           shortcut: 'Ctrl+Shift+C',
@@ -496,7 +483,7 @@ function AppContent() {
 
       // --- Terminal context ---
       else if (isTerminal) {
-        if (!hasTerminalSelection) {
+        if (!hasTermSel) {
           // No selection — still offer paste
         }
 
@@ -507,8 +494,8 @@ function AppContent() {
             navigator.clipboard.readText().then((text) => {
               if (window.electronAPI) {
                 (window.electronAPI as unknown as { writeTerminal: (data: string) => void }).writeTerminal(text);
-              } else if (termRef?.current) {
-                termRef.current.paste(text);
+              } else {
+                pasteToTerminal(text);
               }
             }).catch(() => {});
           },
@@ -519,8 +506,7 @@ function AppContent() {
         items.push({
           label: 'Clear Terminal',
           onClick: () => {
-            const term = window.__quipuXtermInstance;
-            if (term) term.clear();
+            clearTerminal();
           },
         });
       }
@@ -781,7 +767,7 @@ function AppContent() {
               defaultSize={300}
             >
               <div className="h-full bg-bg-surface">
-                <Terminal ref={terminalRef} workspacePath={workspacePath} />
+                <Terminal workspacePath={workspacePath} />
               </div>
             </Panel>
           </Group>
