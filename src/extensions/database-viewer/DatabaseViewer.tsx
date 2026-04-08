@@ -82,20 +82,21 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentCh
 
   return (
     <div className="flex-1 flex flex-col bg-page-bg overflow-hidden">
-      {/* Header */}
-      <div className="shrink-0 px-16 pt-10 pb-2 max-[1200px]:px-8 max-[1150px]:px-4">
-        <h1 className="text-2xl font-bold text-page-text mb-1">{schema.name}</h1>
-        <div className="flex items-center gap-3 text-xs text-page-text/50">
-          <span>
-            {filteredRows.length === rows.length
-              ? `${rows.length} row${rows.length !== 1 ? 's' : ''}`
-              : `${filteredRows.length} of ${rows.length} row${rows.length !== 1 ? 's' : ''}`}
-          </span>
+      <div className="flex-1 flex flex-col w-full max-w-[960px] mx-auto px-16 max-[1200px]:px-8 max-[1150px]:px-4">
+        {/* Header */}
+        <div className="shrink-0 pt-10 pb-2">
+          <h1 className="text-2xl font-bold text-page-text mb-1">{schema.name}</h1>
+          <div className="flex items-center gap-3 text-xs text-page-text/50">
+            <span>
+              {filteredRows.length === rows.length
+                ? `${rows.length} row${rows.length !== 1 ? 's' : ''}`
+                : `${filteredRows.length} of ${rows.length} row${rows.length !== 1 ? 's' : ''}`}
+            </span>
+          </div>
         </div>
-      </div>
 
-      {/* Toolbar */}
-      <div className="shrink-0 flex items-center gap-2 px-16 py-1.5 border-b border-border/30 max-[1200px]:px-8 max-[1150px]:px-4">
+        {/* Toolbar */}
+        <div className="shrink-0 flex items-center gap-2 py-1.5 border-b border-border/30">
 
         {/* Filter and sort controls */}
         <FilterBar
@@ -157,6 +158,8 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentCh
           onAddColumn={() => setIsAddColumnOpen(true)}
         />
       )}
+
+      </div>
 
       {/* Add column dialog */}
       <AddColumnDialog
