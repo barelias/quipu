@@ -305,25 +305,6 @@ const Editor: React.FC<EditorProps> = ({
         return () => el.removeEventListener('wheel', handler);
     }, [handleZoomIn, handleZoomOut]);
 
-    // Re-extract comment positions on zoom change (both editor and browser zoom)
-    useEffect(() => {
-        if (!editor || editor.isDestroyed) return;
-        const timer = setTimeout(() => extractComments(editor), 50);
-        return () => clearTimeout(timer);
-    }, [zoomLevel]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    useEffect(() => {
-        if (!editor || editor.isDestroyed) return;
-        // Browser zoom (Ctrl+/Ctrl-) fires 'resize' on window
-        const handleResize = () => {
-            setTimeout(() => {
-                if (!editor.isDestroyed) extractComments(editor);
-            }, 100);
-        };
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
-
     // Detect if floating comments have space, accounting for zoom
     useEffect(() => {
         const el = editorScrollRef.current;
@@ -1125,6 +1106,24 @@ const Editor: React.FC<EditorProps> = ({
         setShowCommentInput(false);
         savedSelectionRef.current = null;
     };
+
+    // Re-extract comment positions on zoom change (editor + browser zoom)
+    useEffect(() => {
+        if (!editor || editor.isDestroyed) return;
+        const timer = setTimeout(() => extractComments(editor), 50);
+        return () => clearTimeout(timer);
+    }, [zoomLevel]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => {
+        if (!editor || editor.isDestroyed) return;
+        const handleResize = () => {
+            setTimeout(() => {
+                if (!editor.isDestroyed) extractComments(editor);
+            }, 100);
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const resolveComment = (commentId: string): void => {
         if (!editor || !commentId) return;
