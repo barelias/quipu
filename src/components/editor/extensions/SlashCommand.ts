@@ -120,12 +120,11 @@ const SLASH_ITEMS: SlashCommandItem[] = [
   // Database
   {
     title: 'Link Database',
-    description: 'Embed a .quipudb.jsonl database view',
+    description: 'Embed an existing database file',
     icon: '⊞',
     category: 'Database',
     command: (editor, range) => {
-      // Dispatch event to open a file picker for .quipudb.jsonl files
-      const event = new CustomEvent('quipu:pick-database', {
+      window.dispatchEvent(new CustomEvent('quipu:pick-database', {
         detail: {
           callback: (filePath: string) => {
             editor.chain().focus().deleteRange(range).insertContent({
@@ -134,8 +133,25 @@ const SLASH_ITEMS: SlashCommandItem[] = [
             }).run();
           },
         },
-      });
-      window.dispatchEvent(event);
+      }));
+    },
+  },
+  {
+    title: 'Create Database',
+    description: 'Create and embed a new database here',
+    icon: '+⊞',
+    category: 'Database',
+    command: (editor, range) => {
+      window.dispatchEvent(new CustomEvent('quipu:create-database', {
+        detail: {
+          callback: (filePath: string) => {
+            editor.chain().focus().deleteRange(range).insertContent({
+              type: 'embeddedDatabase',
+              attrs: { src: filePath },
+            }).run();
+          },
+        },
+      }));
     },
   },
 ];

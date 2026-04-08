@@ -695,11 +695,10 @@ const Editor: React.FC<EditorProps> = ({
         };
     }, [editorContextMenu, closeEditorMenu]);
 
-    const handleInsertDatabase = useCallback(() => {
+    const handleLinkDatabase = useCallback(() => {
         if (!editor) return;
         closeEditorMenu();
-        // Dispatch event to pick a database file
-        const event = new CustomEvent('quipu:pick-database', {
+        window.dispatchEvent(new CustomEvent('quipu:pick-database', {
             detail: {
                 callback: (filePath: string) => {
                     editor.chain().focus().insertContent({
@@ -708,8 +707,22 @@ const Editor: React.FC<EditorProps> = ({
                     }).run();
                 },
             },
-        });
-        window.dispatchEvent(event);
+        }));
+    }, [editor, closeEditorMenu]);
+
+    const handleCreateDatabase = useCallback(() => {
+        if (!editor) return;
+        closeEditorMenu();
+        window.dispatchEvent(new CustomEvent('quipu:create-database', {
+            detail: {
+                callback: (filePath: string) => {
+                    editor.chain().focus().insertContent({
+                        type: 'embeddedDatabase',
+                        attrs: { src: filePath },
+                    }).run();
+                },
+            },
+        }));
     }, [editor, closeEditorMenu]);
 
     // Keep editor ref in sync for toggleEditorMode
@@ -1562,9 +1575,15 @@ const Editor: React.FC<EditorProps> = ({
                     >
                         <div
                             className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
-                            onClick={handleInsertDatabase}
+                            onClick={handleLinkDatabase}
                         >
                             Link Database
+                        </div>
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={handleCreateDatabase}
+                        >
+                            Create Database
                         </div>
                     </div>
                 )}

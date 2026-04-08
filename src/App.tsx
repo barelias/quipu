@@ -20,6 +20,7 @@ import { useTab } from './context/TabContext';
 import { useTerminal } from './context/TerminalContext';
 import { ToastProvider, useToast } from './components/ui/Toast';
 import frameService from './services/frameService';
+import fs from './services/fileSystem';
 import claudeInstaller from './services/claudeInstaller';
 import DiffViewer from './extensions/diff-viewer/DiffViewer';
 import { resolveViewer, getExtensionForTab, getCommandsForTab } from './extensions/registry';
@@ -659,6 +660,60 @@ function AppContent() {
       }
     }
   }, [editorInstance, editorRawMode, activeFile, activeTab, saveFile, activeTabId, closeTab, sidePanelRef, terminalPanelRef, handlePanelToggle, handleToggleSidebar, handleToggleTerminal, createTerminalTab, toggleTheme, handleSendToTerminal, handleSendToClaude]);
+
+  // Handle database pick/create events from slash commands and context menus
+  useEffect(() => {
+    const handlePickDatabase = async (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const callback = detail?.callback as ((path: string) => void) | undefined;
+      if (!callback) return;
+
+      const filePath = await fs.openFileDialog({
+        filters: [{ name: 'Quipu Database', extensions: ['quipudb.jsonl'] }],
+      });
+
+      if (filePath) {
+        // Convert absolute path to relative if within workspace
+        const relativePath = workspacePath && filePath.startsWith(workspacePath)
+          ? filePath.slice(workspacePath.length + 1)
+          : filePath;
+        callback(relativePath);
+      }
+    };
+
+    const handleCreateDatabase = async (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const callback = detail?.callback as ((path: string) => void) | undefined;
+      if (!callback || !activeFile || !workspacePath) return;
+
+      // Create in same directory as the current file
+      const currentDir = activeFile.path.substring(0, activeFile.path.lastIndexOf('/'));
+      const name = window.prompt('Database name:', 'untitled');
+      if (!name) return;
+
+      const fileName = `${name}.quipudb.jsonl`;
+      const filePath = `${currentDir}/${fileName}`;
+
+      // Create the file with initial schema
+      const { createEmptyDatabase } = await import('./extensions/database-viewer/utils/jsonl');
+      const initialContent = createEmptyDatabase(name.charAt(0).toUpperCase() + name.slice(1));
+      await fs.createFile(filePath);
+      await fs.writeFile(filePath, initialContent);
+
+      // Embed the relative path
+      const relativePath = filePath.startsWith(workspacePath)
+        ? filePath.slice(workspacePath.length + 1)
+        : filePath;
+      callback(relativePath);
+    };
+
+    window.addEventListener('quipu:pick-database', handlePickDatabase);
+    window.addEventListener('quipu:create-database', handleCreateDatabase);
+    return () => {
+      window.removeEventListener('quipu:pick-database', handlePickDatabase);
+      window.removeEventListener('quipu:create-database', handleCreateDatabase);
+    };
+  }, [workspacePath, activeFile]);
 
   // Build title
   let title = 'Quipu';
