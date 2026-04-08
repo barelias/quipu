@@ -173,6 +173,7 @@ const Editor: React.FC<EditorProps> = ({
 
     const [showFindBar, setShowFindBar] = useState<boolean>(false);
     const [commentsOverflow, setCommentsOverflow] = useState<boolean>(false);
+    const [commentPanelOpen, setCommentPanelOpen] = useState<boolean>(false);
 
     // Editor mode: 'richtext' (default) or 'obsidian'
     const [editorMode, setEditorMode] = useState<EditorMode>(() => {
@@ -1171,6 +1172,31 @@ const Editor: React.FC<EditorProps> = ({
 
     return (
         <div className="flex flex-col h-full w-full bg-bg-surface overflow-hidden relative">
+            {/* Selection popup — rendered at root level to avoid transform/overflow issues */}
+            {showMenu && editor && (
+                <div
+                    className="flex bg-bg-overlay p-0.5 rounded-lg shadow-lg border border-border z-[100]"
+                    style={{
+                        position: 'fixed',
+                        top: menuPosition.top,
+                        left: menuPosition.left,
+                        transform: 'translateX(-50%)',
+                    }}
+                    ref={menuRef}
+                    onMouseDown={(e) => e.preventDefault()}
+                >
+                    <button
+                        onClick={handleCommentClick}
+                        className={cn(
+                            "border-none bg-transparent text-text-primary text-sm font-medium py-1.5 px-3 cursor-pointer rounded-md",
+                            "hover:bg-accent/20",
+                            editor.isActive('comment') && "bg-accent/20",
+                        )}
+                    >
+                        Comment
+                    </button>
+                </div>
+            )}
             {editorMode === 'richtext' && editor && (
                 <div className="shrink-0 flex items-center gap-1 px-4 py-2 border-b border-border bg-bg-surface">
                     <ToolbarButton
@@ -1406,31 +1432,7 @@ const Editor: React.FC<EditorProps> = ({
                             />
                         </div>
                     )}
-                    {showMenu && (
-                        <div
-                            className="flex bg-bg-overlay p-0.5 rounded-lg shadow-lg border border-border"
-                            style={{
-                                position: 'fixed',
-                                top: menuPosition.top,
-                                left: menuPosition.left,
-                                transform: 'translateX(-50%)',
-                                zIndex: 100
-                            }}
-                            ref={menuRef}
-                            onMouseDown={(e) => e.preventDefault()}
-                        >
-                            <button
-                                onClick={handleCommentClick}
-                                className={cn(
-                                    "border-none bg-transparent text-text-primary text-sm font-medium py-1.5 px-3 cursor-pointer rounded-md",
-                                    "hover:bg-accent/20",
-                                    editor.isActive('comment') && "bg-accent/20",
-                                )}
-                            >
-                                Comment
-                            </button>
-                        </div>
-                    )}
+                    {/* Comment selection menu is rendered outside the scroll container via portal below */}
                     <div className={editorMode === 'richtext' ? 'editor-richtext' : editorMode === 'obsidian' ? 'editor-obsidian' : 'editor-raw'}>
                         {editorMode === 'raw' ? (
                             <textarea
@@ -1448,12 +1450,12 @@ const Editor: React.FC<EditorProps> = ({
 
                 {/* Floating Comments Track (wide viewport only) */}
                 {!commentsOverflow && <div className={cn(
-                    "absolute top-8 w-[300px] bottom-0 pointer-events-none",
-                    "left-[calc(50%+408px+1rem)]",
-                    "max-[1400px]:left-[867px]",
-                    "max-[1200px]:left-[calc(2rem+816px+1rem)]",
-                    "max-[1150px]:w-auto",
-                )}>
+                    "absolute top-8 w-[280px] bottom-0 pointer-events-none",
+                )}
+                style={{
+                    left: `calc(50% + ${(816 * zoomLevel / 100) / 2 + 16}px)`,
+                }}
+                >
                     {showCommentInput && (
                         <div
                             className="absolute w-[280px] bg-bg-surface rounded-lg shadow-lg p-3 pointer-events-auto border border-accent z-[100]"
@@ -1556,8 +1558,8 @@ const Editor: React.FC<EditorProps> = ({
                                     </button>
                                 </div>
                             </div>
-                            <div className="text-sm text-page-text mb-2 whitespace-pre-wrap">{c.comment}</div>
-                            <div className="text-xs text-text-secondary border-l-2 border-warning pl-2 italic whitespace-nowrap overflow-hidden text-ellipsis">"{c.text}"</div>
+                            <div className="text-base text-page-text mb-2 whitespace-pre-wrap font-editor">{c.comment}</div>
+                            <div className="text-sm text-text-secondary border-l-2 border-warning pl-2 italic line-clamp-2">"{c.text}"</div>
                         </div>
                     ))}
                 </div>}
@@ -1651,13 +1653,30 @@ const Editor: React.FC<EditorProps> = ({
                 )}
             </div>
 
-            {/* Comment Panel — outside the scroll container so it stays fixed */}
-            {commentsOverflow && comments.length > 0 && (
+            {/* Comment toggle button (when overflow and panel is closed) */}
+            {commentsOverflow && comments.length > 0 && !commentPanelOpen && (
+                <button
+                    onClick={() => setCommentPanelOpen(true)}
+                    className="absolute top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-surface/90 backdrop-blur-sm border border-border/50 shadow-sm text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors text-xs font-medium"
+                >
+                    <XIcon size={14} className="rotate-45" /> {/* Use as a chat icon stand-in */}
+                    <span>{comments.length}</span>
+                </button>
+            )}
+
+            {/* Comment Panel — collapsible side panel */}
+            {commentsOverflow && comments.length > 0 && commentPanelOpen && (
                 <div className="shrink-0 w-[320px] border-l border-border/30 bg-bg-surface overflow-y-auto">
-                    <div className="px-4 py-3 border-b border-border/30 sticky top-0 bg-bg-surface z-10">
+                    <div className="px-4 py-3 border-b border-border/30 sticky top-0 bg-bg-surface z-10 flex items-center justify-between">
                         <span className="text-sm font-medium text-text-primary">
                             Comments ({comments.length})
                         </span>
+                        <button
+                            onClick={() => setCommentPanelOpen(false)}
+                            className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-bg-elevated"
+                        >
+                            <XIcon size={14} />
+                        </button>
                     </div>
                     {comments.map((c) => (
                         <div
