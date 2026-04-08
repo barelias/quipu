@@ -2,47 +2,40 @@ import React, { useRef, useCallback } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
-  getSortedRowModel,
-  getFilteredRowModel,
   flexRender,
 } from '@tanstack/react-table';
-import type { SortingState, ColumnFiltersState } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { PlusIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useColumnDefs } from '../hooks/useColumnDefs';
-import type { DatabaseSchema, DatabaseRow } from '../types';
+import { ColumnHeaderMenu } from './ColumnManager';
+import type { DatabaseSchema, DatabaseRow, ColumnDef, ColumnType } from '../types';
 
 interface TableViewProps {
   schema: DatabaseSchema;
   rows: DatabaseRow[];
   updateCell: (rowId: string, columnId: string, value: unknown) => void;
   addRow: () => void;
+  deleteRow?: (rowId: string) => void;
+  renameColumn?: (columnId: string, newName: string) => void;
+  removeColumn?: (columnId: string) => void;
+  changeColumnType?: (columnId: string, newType: ColumnType) => void;
+  onAddColumn?: () => void;
 }
 
 const ROW_HEIGHT = 36;
 
-const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow }) => {
+const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow, deleteRow, renameColumn, removeColumn, changeColumnType, onAddColumn }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const columns = useColumnDefs(schema);
-
-  const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
 
   const table = useReactTable({
     data: rows,
     columns,
-    state: {
-      sorting,
-      columnFilters,
-    },
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     columnResizeMode: 'onChange',
     enableColumnResizing: true,
-    enableSorting: true,
+    enableSorting: false,
     getRowId: (row) => row._id,
     meta: {
       updateCell,
@@ -86,25 +79,29 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow 
             {table.getHeaderGroups().map(headerGroup => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map(header => (
+
                   <th
                     key={header.id}
                     className={cn(
                       'relative text-left px-3 py-2 text-text-secondary font-medium text-xs uppercase tracking-wide',
                       'border-b border-r border-border select-none',
-                      header.column.getCanSort() && 'cursor-pointer hover:bg-bg-surface',
                     )}
                     style={{ width: header.getSize() }}
-                    onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center gap-1">
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(header.column.columnDef.header, header.getContext())}
-                      {header.column.getIsSorted() === 'asc' && (
-                        <span className="text-accent text-[10px]">▲</span>
-                      )}
-                      {header.column.getIsSorted() === 'desc' && (
-                        <span className="text-accent text-[10px]">▼</span>
+                      {header.isPlaceholder ? null : (
+                        renameColumn && removeColumn && changeColumnType ? (
+                          <ColumnHeaderMenu
+                            columnId={header.column.id}
+                            columnName={String(header.column.columnDef.header ?? header.column.id)}
+                            onRename={renameColumn}
+                            onDelete={removeColumn}
+                            onChangeType={changeColumnType}
+                            currentType={(header.column.columnDef.meta as { columnDef?: ColumnDef })?.columnDef?.type ?? 'text'}
+                          />
+                        ) : (
+                          flexRender(header.column.columnDef.header, header.getContext())
+                        )
                       )}
                     </div>
                     {/* Resize handle */}
@@ -119,6 +116,17 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow 
                     />
                   </th>
                 ))}
+                {onAddColumn && (
+                  <th className="border-b border-border px-2 py-2 w-10">
+                    <button
+                      onClick={onAddColumn}
+                      className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-bg-surface transition-colors"
+                      title="Add column"
+                    >
+                      <PlusIcon size={14} />
+                    </button>
+                  </th>
+                )}
               </tr>
             ))}
           </thead>
