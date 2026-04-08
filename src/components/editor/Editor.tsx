@@ -1107,23 +1107,33 @@ const Editor: React.FC<EditorProps> = ({
         savedSelectionRef.current = null;
     };
 
-    // Re-extract comment positions on zoom change (editor + browser zoom)
-    useEffect(() => {
+    // Re-extract comment positions on zoom, resize, scroll, and layout changes
+    const refreshCommentPositions = useCallback(() => {
         if (!editor || editor.isDestroyed) return;
-        const timer = setTimeout(() => extractComments(editor), 50);
-        return () => clearTimeout(timer);
-    }, [zoomLevel]); // eslint-disable-line react-hooks/exhaustive-deps
+        requestAnimationFrame(() => {
+            if (!editor.isDestroyed) extractComments(editor);
+        });
+    }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        if (!editor || editor.isDestroyed) return;
-        const handleResize = () => {
-            setTimeout(() => {
-                if (!editor.isDestroyed) extractComments(editor);
-            }, 100);
+        refreshCommentPositions();
+    }, [zoomLevel, refreshCommentPositions]);
+
+    useEffect(() => {
+        const el = editorScrollRef.current;
+        if (!el) return;
+        // Recalc on scroll and resize
+        el.addEventListener('scroll', refreshCommentPositions, { passive: true });
+        window.addEventListener('resize', refreshCommentPositions);
+        // MutationObserver catches frontmatter expand/collapse and other DOM changes
+        const observer = new MutationObserver(refreshCommentPositions);
+        observer.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+        return () => {
+            el.removeEventListener('scroll', refreshCommentPositions);
+            window.removeEventListener('resize', refreshCommentPositions);
+            observer.disconnect();
         };
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [refreshCommentPositions]);
 
     const resolveComment = (commentId: string): void => {
         if (!editor || !commentId) return;
@@ -1154,19 +1164,20 @@ const Editor: React.FC<EditorProps> = ({
 
     const scrollToComment = useCallback((commentId: string) => {
         if (!editor) return;
-        // Find the comment mark position and scroll to it
         editor.state.doc.descendants((node, pos) => {
             const mark = node.marks?.find(m => m.type.name === 'comment' && m.attrs.id === commentId);
             if (mark) {
+                // Focus and select the commented text
                 editor.chain().focus().setTextSelection(pos).run();
-                // Scroll the editor to the position
-                const dom = editor.view.domAtPos(pos);
-                if (dom.node instanceof HTMLElement) {
-                    dom.node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                } else if (dom.node.parentElement) {
-                    dom.node.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Scroll the editor's scroll container to show the position
+                const coords = editor.view.coordsAtPos(pos);
+                const scrollEl = editorScrollRef.current;
+                if (scrollEl) {
+                    const scrollRect = scrollEl.getBoundingClientRect();
+                    const targetY = coords.top - scrollRect.top + scrollEl.scrollTop - scrollEl.clientHeight / 3;
+                    scrollEl.scrollTo({ top: Math.max(0, targetY), behavior: 'smooth' });
                 }
-                return false; // stop iteration
+                return false;
             }
         });
     }, [editor]);
@@ -1352,16 +1363,23 @@ const Editor: React.FC<EditorProps> = ({
                         Rich Text
                     </button>
 
-                    {commentsOverflow && comments.length > 0 && (
+                    {comments.length > 0 && (
                         <button
-                            onClick={() => setCommentPanelOpen(prev => !prev)}
+                            onClick={() => {
+                                if (commentsOverflow) {
+                                    setCommentPanelOpen(prev => !prev);
+                                } else {
+                                    // In float mode, toggle to panel mode temporarily
+                                    setCommentPanelOpen(prev => !prev);
+                                }
+                            }}
                             className={cn(
                                 "flex items-center gap-1 text-[11px] px-2 py-1 rounded transition-colors",
                                 commentPanelOpen
                                     ? "text-accent bg-accent/10"
                                     : "text-text-tertiary hover:text-text-secondary hover:bg-bg-elevated",
                             )}
-                            title={commentPanelOpen ? "Hide comments" : "Show comments"}
+                            title={commentPanelOpen ? "Hide comments" : `${comments.length} comment${comments.length !== 1 ? 's' : ''}`}
                         >
                             <ChatCircleDotsIcon size={14} />
                             <span>{comments.length}</span>
@@ -1434,7 +1452,7 @@ const Editor: React.FC<EditorProps> = ({
                 ref={editorScrollRef}
                 className={cn(
                     "flex-1 flex justify-center items-start overflow-y-auto relative bg-page-bg",
-                    !commentsOverflow && comments.length > 0 && "pr-[140px]",
+                    !commentsOverflow && comments.length > 0 && "pr-[120px]",
                     "pt-0 pb-12 px-16",
                     "max-[1400px]:justify-start max-[1400px]:pl-12",
                     "max-[1200px]:overflow-x-auto max-[1200px]:px-8 max-[1200px]:pb-8",
@@ -1493,7 +1511,7 @@ const Editor: React.FC<EditorProps> = ({
                     "absolute top-0 w-[280px] bottom-0 pointer-events-none",
                 )}
                 style={{
-                    left: `calc(50% + ${(816 * zoomLevel / 100) / 2 + 4}px)`,
+                    left: `calc(50% + ${(816 * zoomLevel / 100) / 2}px)`,
                 }}
                 >
                     {showCommentInput && !commentsOverflow && (
@@ -1681,7 +1699,7 @@ const Editor: React.FC<EditorProps> = ({
             </div>
 
             {/* Comment Panel — collapsible side panel */}
-            {commentsOverflow && comments.length > 0 && commentPanelOpen && (
+            {comments.length > 0 && commentPanelOpen && (
                 <div className="shrink-0 w-[320px] border-l border-border/30 bg-bg-surface overflow-y-auto">
                     <div className="px-4 py-3 border-b border-border/30 sticky top-0 bg-bg-surface z-10 flex items-center justify-between">
                         <span className="text-sm font-medium text-text-primary">
