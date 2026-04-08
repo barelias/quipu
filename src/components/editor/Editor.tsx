@@ -4,7 +4,7 @@ import {
     XIcon, TextBIcon, TextItalicIcon, TextStrikethroughIcon,
     TextHOneIcon, TextHTwoIcon, TextHThreeIcon,
     ListBulletsIcon, ListNumbersIcon, QuotesIcon, CodeIcon, CodeBlockIcon,
-    TableIcon, MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon,
+    TableIcon, MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon, ChatCircleDotsIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -958,16 +958,18 @@ const Editor: React.FC<EditorProps> = ({
 
     const extractComments = (editor: TiptapEditor): void => {
         const commentsData: CommentData[] = [];
-        const pageRect = pageRef.current?.getBoundingClientRect();
-        const pageTop = pageRect ? pageRect.top : 0;
+        const scrollEl = editorScrollRef.current;
+        const scrollTop = scrollEl ? scrollEl.scrollTop : 0;
+        const scrollRect = scrollEl?.getBoundingClientRect();
+        const scrollContainerTop = scrollRect ? scrollRect.top : 0;
 
         editor.state.doc.descendants((node, pos) => {
             if (node.marks) {
                 const commentMark = node.marks.find(m => m.type.name === 'comment');
                 if (commentMark) {
-                    // Get coordinates
+                    // Get viewport coordinates and convert to scroll-container-relative
                     const coords = editor.view.coordsAtPos(pos);
-                    const relativeTop = coords.top - pageTop;
+                    const relativeTop = coords.top - scrollContainerTop + scrollTop;
 
                     commentsData.push({
                         text: node.text ?? '',
@@ -1328,6 +1330,22 @@ const Editor: React.FC<EditorProps> = ({
                     >
                         Rich Text
                     </button>
+
+                    {commentsOverflow && comments.length > 0 && (
+                        <button
+                            onClick={() => setCommentPanelOpen(prev => !prev)}
+                            className={cn(
+                                "flex items-center gap-1 text-[11px] px-2 py-1 rounded transition-colors",
+                                commentPanelOpen
+                                    ? "text-accent bg-accent/10"
+                                    : "text-text-tertiary hover:text-text-secondary hover:bg-bg-elevated",
+                            )}
+                            title={commentPanelOpen ? "Hide comments" : "Show comments"}
+                        >
+                            <ChatCircleDotsIcon size={14} />
+                            <span>{comments.length}</span>
+                        </button>
+                    )}
                 </div>
             )}
 
@@ -1450,7 +1468,7 @@ const Editor: React.FC<EditorProps> = ({
 
                 {/* Floating Comments Track (wide viewport only) */}
                 {!commentsOverflow && <div className={cn(
-                    "absolute top-8 w-[280px] bottom-0 pointer-events-none",
+                    "absolute top-0 w-[280px] bottom-0 pointer-events-none",
                 )}
                 style={{
                     left: `calc(50% + ${(816 * zoomLevel / 100) / 2 + 16}px)`,
@@ -1558,8 +1576,8 @@ const Editor: React.FC<EditorProps> = ({
                                     </button>
                                 </div>
                             </div>
-                            <div className="text-base text-page-text mb-2 whitespace-pre-wrap font-editor">{c.comment}</div>
-                            <div className="text-sm text-text-secondary border-l-2 border-warning pl-2 italic line-clamp-2">"{c.text}"</div>
+                            <div className="text-[13px] text-page-text mb-1.5 whitespace-pre-wrap leading-relaxed">{c.comment}</div>
+                            <div className="text-[11px] text-text-secondary/60 border-l-2 border-warning/40 pl-2 italic line-clamp-2">"{c.text}"</div>
                         </div>
                     ))}
                 </div>}
@@ -1652,17 +1670,6 @@ const Editor: React.FC<EditorProps> = ({
                     </div>
                 )}
             </div>
-
-            {/* Comment toggle button (when overflow and panel is closed) */}
-            {commentsOverflow && comments.length > 0 && !commentPanelOpen && (
-                <button
-                    onClick={() => setCommentPanelOpen(true)}
-                    className="absolute top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-surface/90 backdrop-blur-sm border border-border/50 shadow-sm text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors text-xs font-medium"
-                >
-                    <XIcon size={14} className="rotate-45" /> {/* Use as a chat icon stand-in */}
-                    <span>{comments.length}</span>
-                </button>
-            )}
 
             {/* Comment Panel — collapsible side panel */}
             {commentsOverflow && comments.length > 0 && commentPanelOpen && (
