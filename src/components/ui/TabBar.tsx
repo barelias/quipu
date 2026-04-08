@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react';
 import { XIcon, CircleIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useTab } from '../../context/TabContext';
 
 interface Tab {
     id: string;
@@ -11,7 +11,7 @@ interface Tab {
 }
 
 export default function TabBar() {
-    const { openTabs, activeTabId, switchTab, closeTab } = useWorkspace();
+    const { openTabs, activeTabId, switchTab, closeTab } = useTab();
 
     const handleClose = useCallback((e: React.MouseEvent<HTMLButtonElement>, tabId: string) => {
         e.stopPropagation();

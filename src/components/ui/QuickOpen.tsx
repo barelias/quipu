@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Command } from 'cmdk';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useFileSystem } from '../../context/FileSystemContext';
+import { useTab } from '../../context/TabContext';
 import searchService from '../../services/searchService';
 import { commands } from '../../data/commands';
 import type { Command as CommandType } from '../../data/commands';
@@ -19,7 +20,8 @@ interface QuickOpenProps {
 }
 
 export default function QuickOpen({ isOpen, onClose, onAction, initialValue = '' }: QuickOpenProps) {
-  const { workspacePath, openFile } = useWorkspace();
+  const { workspacePath } = useFileSystem();
+  const { openFile } = useTab();
   const [query, setQuery] = useState<string>('');
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);

@@ -5,7 +5,8 @@ import {
   FileCodeIcon, FileMdIcon, FileTextIcon, ArrowClockwiseIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useFileSystem } from '../../context/FileSystemContext';
+import { useTab } from '../../context/TabContext';
 import ContextMenu from './ContextMenu';
 import type { FileTreeEntry } from '../../types/workspace';
 
@@ -64,18 +65,20 @@ function FileIconComponent({ name, isDirectory, isExpanded, isDirty }: FileIconC
 
 function FileTreeItem({ entry, depth = 0 }: FileTreeItemProps) {
   const {
-    activeFile,
     expandedFolders,
     toggleFolder,
-    openFile,
     loadSubDirectory,
     createNewFile,
     createNewFolder,
     deleteEntry,
     renameEntry,
-    openTabs,
     directoryVersion,
-  } = useWorkspace();
+  } = useFileSystem();
+  const {
+    activeFile,
+    openFile,
+    openTabs,
+  } = useTab();
 
   const [children, setChildren] = useState<FileTreeEntry[]>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
@@ -356,7 +359,7 @@ function FileTreeItem({ entry, depth = 0 }: FileTreeItemProps) {
 }
 
 export default function FileExplorer() {
-  const { workspacePath, fileTree, openFolder, refreshDirectory, renameEntry, createNewFile, createNewFolder } = useWorkspace();
+  const { workspacePath, fileTree, openFolder, refreshDirectory, renameEntry, createNewFile, createNewFolder } = useFileSystem();
   const [isRootDragOver, setIsRootDragOver] = useState<boolean>(false);
   const [rootContextMenu, setRootContextMenu] = useState<ContextMenuPosition | null>(null);
   const [isRootCreating, setIsRootCreating] = useState<CreatingType>(null);

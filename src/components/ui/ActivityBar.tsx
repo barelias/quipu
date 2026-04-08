@@ -2,7 +2,7 @@ import React from 'react';
 import { FilesIcon, MagnifyingGlassIcon, GitBranchIcon } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useFileSystem } from '../../context/FileSystemContext';
 
 type PanelId = 'explorer' | 'search' | 'git';
 
@@ -24,7 +24,7 @@ const PANELS: PanelDef[] = [
 ];
 
 export default function ActivityBar({ activePanel, onPanelToggle }: ActivityBarProps) {
-    const { gitChangeCount } = useWorkspace();
+    const { gitChangeCount } = useFileSystem();
 
     return (
         <div

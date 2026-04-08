@@ -12,7 +12,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { PlusIcon, XIcon, MagnifyingGlassIcon, ArrowUpIcon, ArrowDownIcon, TerminalWindowIcon } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import { useWorkspace } from "../../context/WorkspaceContext";
+import { useTerminal } from "../../context/TerminalContext";
 import { useToast } from "./Toast";
 import terminalService, { isElectron } from "../../services/terminalService";
 import { WS_URL } from "../../config.js";
@@ -79,7 +79,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ workspacePath }, r
     createTerminalTab,
     closeTerminalTab,
     switchTerminalTab,
-  } = useWorkspace();
+  } = useTerminal();
   const { showToast } = useToast();
 
   // Map of terminalId -> { xterm, fitAddon, searchAddon, ws (browser only), containerEl }

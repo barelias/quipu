@@ -14,7 +14,9 @@ import QuickOpen from './components/ui/QuickOpen';
 import TitleBar from './components/ui/TitleBar';
 import ContextMenu from './components/ui/ContextMenu';
 import FileConflictBar from './components/ui/FileConflictBar';
-import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
+import { WorkspaceProvider } from './context/WorkspaceContext';
+import { useFileSystem } from './context/FileSystemContext';
+import { useTab } from './context/TabContext';
 import { useTerminal } from './context/TerminalContext';
 import { ToastProvider, useToast } from './components/ui/Toast';
 import frameService from './services/frameService';
@@ -49,15 +51,17 @@ function AppContent() {
   const toggleEditorModeRef = React.useRef<(() => void) | null>(null);
   const toggleFindRef = React.useRef<(() => void) | null>(null);
   const {
-    activeFile, saveFile, setIsDirty, updateTabContent, showFolderPicker, selectFolder, cancelFolderPicker, openFile,
+    workspacePath, showFolderPicker, selectFolder, cancelFolderPicker, revealFolder,
+  } = useFileSystem();
+  const {
+    activeFile, saveFile, setIsDirty, updateTabContent, openFile,
     activeTabId, activeTab, snapshotTab, openTabs, closeTab, switchTab,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
     renameFrontmatterKey, toggleFrontmatterCollapsed,
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
-    workspacePath, revealFolder,
     resolveConflictReload, resolveConflictKeep, resolveConflictDismiss,
     reloadTabFromDisk,
-  } = useWorkspace();
+  } = useTab();
   const {
     terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
     sendToTerminal, clearTerminal, getTerminalSelection, hasTerminalSelection,

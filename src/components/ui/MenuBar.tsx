@@ -4,7 +4,7 @@ import { CaretRightIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { menus } from '../../data/commands';
 import type { MenuItem } from '../../data/commands';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useFileSystem } from '../../context/FileSystemContext';
 import type { RecentWorkspace } from '../../types/workspace';
 
 interface MenuBarProps {
@@ -12,7 +12,7 @@ interface MenuBarProps {
 }
 
 const MenuBar = ({ onAction }: MenuBarProps) => {
-  const { recentWorkspaces, selectFolder, clearRecentWorkspaces } = useWorkspace();
+  const { recentWorkspaces, selectFolder, clearRecentWorkspaces } = useFileSystem();
 
   const handleItemClick = useCallback((item: MenuItem) => {
     if (item && 'action' in item && item.action && onAction) {

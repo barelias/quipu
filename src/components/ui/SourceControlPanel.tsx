@@ -5,7 +5,7 @@ import {
   GearIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useFileSystem } from '../../context/FileSystemContext';
 import { useToast } from './Toast';
 import gitService from '../../services/gitService';
 
@@ -60,7 +60,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function SourceControlPanel({ onOpenDiff }: SourceControlPanelProps) {
-  const { workspacePath, updateGitChangeCount } = useWorkspace();
+  const { workspacePath, updateGitChangeCount } = useFileSystem();
   const { showToast } = useToast();
 
   const [isLoading, setIsLoading] = useState<boolean>(false);

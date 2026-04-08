@@ -1,6 +1,6 @@
-# Quipu Simple
+# Quipu
 
-A web-based code editor built with React + Vite + Electron, featuring a TipTap rich text editor, xterm.js terminal, and dual runtime support (Electron desktop + browser with Go backend).
+A web-based code editor built with React + Vite + Electron + TypeScript, featuring a TipTap rich text editor, xterm.js terminal, and dual runtime support (Electron desktop + browser with Go backend).
 
 ## Architecture
 
@@ -11,7 +11,7 @@ Every backend operation must work in **both** runtimes:
 - **Browser**: REST/WebSocket calls to Go server at `localhost:3000` in `server/main.go`
 
 The adapter pattern in `src/services/` selects the implementation at module load:
-```javascript
+```typescript
 const fs = isElectron() ? electronFS : browserFS;
 ```
 
@@ -19,20 +19,68 @@ const fs = isElectron() ? electronFS : browserFS;
 1. Go server endpoint (`server/main.go`)
 2. Electron IPC handler (`electron/main.cjs`)
 3. Preload bridge (`electron/preload.cjs`)
-4. Service adapter (`src/services/<name>.js`)
+4. Service adapter (`src/services/<name>.ts`)
 
 ### Service Layer
 
-- `src/services/fileSystem.js` - file CRUD operations
-- `src/services/gitService.js` - git operations (planned)
-- `src/services/searchService.js` - text search + file listing (planned)
+- `src/services/fileSystem.ts` - file CRUD operations
+- `src/services/gitService.ts` - git operations
+- `src/services/searchService.ts` - text search + file listing
+- `src/services/frameService.ts` - FRAME annotation sidecar files
+- `src/services/terminalService.ts` - terminal I/O
+- `src/services/storageService.ts` - persistent key-value storage
+- `src/services/kernelService.ts` - Jupyter kernel management
+- `src/services/fileWatcher.ts` - file change detection
+- `src/services/claudeInstaller.ts` - Claude CLI integration
 
-Each service exports a single default object with the same API shape for both runtimes.
+Each service exports a typed interface and a default implementation object.
 
 ### State Management
 
-- **Single context**: `WorkspaceContext` is the sole state provider. No Redux, Zustand, or useReducer.
-- **No TypeScript**: Plain JavaScript (.jsx / .js / .css) throughout.
+Three focused React contexts composed by `WorkspaceProvider`:
+
+- **`TabContext`** (`src/context/TabContext.tsx`) — Tab state (`openTabs`, `activeTabId`), file operations (`openFile`, `saveFile`, `closeTab`), frontmatter operations, file watcher, conflict resolution, session restore. Uses `useTab()` hook.
+- **`FileSystemContext`** (`src/context/FileSystemContext.tsx`) — Workspace state (`workspacePath`, `fileTree`, `expandedFolders`), file CRUD (`createNewFile`, `deleteEntry`, `renameEntry`), workspace management (`selectFolder`, `recentWorkspaces`). Uses `useFileSystem()` hook.
+- **`TerminalContext`** (`src/context/TerminalContext.tsx`) — Terminal tabs, xterm operations (`sendToTerminal`, `clearTerminal`, `getTerminalSelection`). Replaces all `window.__quipu*` globals. Uses `useTerminal()` hook.
+- **`WorkspaceProvider`** (`src/context/WorkspaceContext.tsx`) — Thin composition wrapper. Nesting: `FileSystemProvider > TabProvider > TerminalProvider > SessionPersistence`.
+
+**No Redux, Zustand, or useReducer.** Each context uses `useState` + `useCallback`.
+
+### Component Organization
+
+```
+src/components/
+  editor/           # Editor-specific components
+    Editor.tsx       # TipTap rich text editor with comment system
+    FindBar.tsx      # In-editor find/replace
+    FrontmatterProperties.tsx  # YAML frontmatter editor
+    extensions/      # TipTap ProseMirror plugins
+      BlockDragHandle.ts
+      RevealMarkdown.ts
+      FindReplace.ts
+      WikiLink.ts
+      CodeBlockWithLang.tsx
+  ui/                # General UI + shadcn primitives
+    ActivityBar.tsx, FileExplorer.tsx, TabBar.tsx, Terminal.tsx, ...
+    Toast.tsx (sonner), MenuBar.tsx (Radix), QuickOpen.tsx (cmdk), FolderPicker.tsx (Radix Dialog)
+    button.tsx, input.tsx, badge.tsx, collapsible.tsx  # shadcn (lowercase)
+```
+
+### Extension System
+
+Viewer extensions in `src/extensions/` register with the registry and replace the editor for specific file types:
+
+```
+src/extensions/
+  registry.ts        # registerExtension(), resolveViewer(), getExtensionForTab(), getCommandsForTab()
+  index.ts           # Side-effect import registering all viewers
+  types.ts           # ExtensionDescriptor interface
+  pdf-viewer/, code-viewer/, notebook/, mermaid-viewer/, media-viewer/, excalidraw-viewer/, diff-viewer/
+```
+
+Extension descriptors support: `{ id, canHandle, priority, component, commands?, onSave?, onSnapshot? }`
+
+**TipTap plugins** live in `src/components/editor/extensions/` (separate from viewer extensions).
 
 ### Editor
 
@@ -45,18 +93,24 @@ Each service exports a single default object with the same API shape for both ru
 
 ## Code Conventions
 
+### TypeScript
+- **Strict mode** (`strict: true` in tsconfig.json) — all files are `.ts`/`.tsx`
+- **Props interfaces** for all components (e.g., `interface EditorProps { ... }`)
+- **Typed hooks**: `useState<Type>()`, `useRef<Type>()`, typed `useCallback` parameters
+- **Shared types** in `src/types/`: `tab.ts`, `workspace.ts`, `editor.ts`, `extensions.ts`
+- **Pragmatic `any`** allowed only for ProseMirror plugin internals in `src/components/editor/extensions/`
+
 ### Components
 - **Functional components only** - no class components
-- **Arrow functions** for Editor, Terminal; **named function declarations** for FileExplorer, App
 - **Tailwind CSS v4** for all styling — no co-located CSS files per component
-- **shadcn/ui** primitives in `src/components/ui/` (Button, Input, Badge, Collapsible)
+- **shadcn/ui** primitives in `src/components/ui/` (Button, Input, Badge, Collapsible + Radix Menubar, cmdk Command, sonner Toast, Radix Dialog)
 - **Phosphor Icons** via `@phosphor-icons/react` — use `Icon` suffix naming (e.g., `FilesIcon`, `XIcon`)
 - **`cn()` utility** from `@/lib/utils` for conditional class composition (clsx + tailwind-merge)
-- **Path alias** `@/` maps to `./src` in vite.config.js
+- **Path alias** `@/` maps to `./src` in vite.config.ts
 
 ### Naming
-- Component files: PascalCase (`Editor.jsx`, `FileExplorer.jsx`)
-- Service/context files: camelCase (`fileSystem.js`, `WorkspaceContext.jsx`)
+- Component files: PascalCase (`Editor.tsx`, `FileExplorer.tsx`)
+- Service/context files: camelCase (`fileSystem.ts`, `TabContext.tsx`)
 - Handlers: `handle` prefix (`handleClick`, `handleContextMenu`)
 - Booleans: `is` prefix (`isDirty`, `isExpanded`)
 
@@ -64,7 +118,8 @@ Each service exports a single default object with the same API shape for both ru
 - `useCallback` for all event handlers and context operations
 - `useRef` for DOM references and mutable values
 - `useEffect` with explicit dependency arrays
-- No custom hooks besides `useWorkspace()`
+- **Hook ordering** (critical — prevents TDZ bugs): state first, leaf callbacks second, dependent callbacks third, effects last
+- Context hooks: `useTab()`, `useFileSystem()`, `useTerminal()`
 
 ### Styling
 
@@ -79,20 +134,13 @@ Theme tokens defined in `src/styles/theme.css` via `@theme` directive:
 - **Git status**: `text-git-modified`, `text-git-added`, `text-git-deleted`, `text-git-renamed`
 - **Semantic**: `bg-error`, `bg-warning`, `bg-success`, `bg-info`
 
-Key patterns used throughout:
-- `group` + `group-hover:` for parent-hover child-visibility (close buttons, file actions)
-- `cn()` for conditional styling: `cn("base-classes", isActive && "active-classes")`
-- Arbitrary values for responsive: `max-[1400px]:`, `max-[1200px]:`
-- `after:` pseudo-elements for resize handles
-- `white/[0.06]` opacity for hover states on dark backgrounds
-
 Remaining CSS files (not in Tailwind):
 - `src/index.css` — Google Fonts import, global scrollbar, body/root base styles
 - `src/styles/theme.css` — Tailwind v4 `@theme` tokens, custom keyframe animations
 - `src/styles/prosemirror.css` — TipTap/ProseMirror DOM styles (can't be controlled via Tailwind)
 
 ### Error Handling
-- Use `showToast(message, type)` for all user-facing errors
+- Use `showToast(message, type)` for all user-facing errors (powered by sonner)
 - Never use `console.error` alone for failures the user should know about
 - Toast types: `error`, `warning`, `success`, `info`
 
@@ -114,21 +162,27 @@ Remaining CSS files (not in Tailwind):
 npm run dev          # Vite dev server (browser mode, needs Go server)
 npm run start        # Vite + Electron concurrently
 cd server && go run main.go  # Go backend server
+npm run test:run     # Run all tests
+npx tsc --noEmit     # Type check
 ```
 
 ## Key Files
 
-- `src/App.jsx` - Root layout, keyboard shortcuts
-- `src/context/WorkspaceContext.jsx` - All workspace state + file operations
-- `src/components/Editor.jsx` - TipTap editor with comment system
-- `src/components/FileExplorer.jsx` - File tree sidebar
-- `src/components/Terminal.jsx` - xterm.js terminal
-- `src/components/TitleBar.jsx` - Window title bar with MenuBar and window controls
-- `src/components/FrontmatterProperties.jsx` - YAML frontmatter editor (uses shadcn/ui)
+- `src/App.tsx` - Root layout, keyboard shortcuts
+- `src/context/WorkspaceContext.tsx` - Provider composition (FileSystem > Tab > Terminal)
+- `src/context/TabContext.tsx` - Tab state, file operations, file watcher, session
+- `src/context/FileSystemContext.tsx` - Workspace path, file tree, file CRUD
+- `src/context/TerminalContext.tsx` - Terminal tabs, xterm operations
+- `src/components/editor/Editor.tsx` - TipTap editor with comment system
+- `src/components/ui/FileExplorer.tsx` - File tree sidebar
+- `src/components/ui/Terminal.tsx` - xterm.js terminal
+- `src/components/ui/TitleBar.tsx` - Window title bar with MenuBar and window controls
+- `src/components/editor/FrontmatterProperties.tsx` - YAML frontmatter editor
+- `src/extensions/registry.ts` - Extension registry with descriptor dispatch
 - `src/styles/theme.css` - Tailwind v4 theme tokens and custom animations
 - `src/styles/prosemirror.css` - TipTap/ProseMirror editor styles
-- `src/lib/utils.js` - `cn()` utility (clsx + tailwind-merge)
-- `src/services/fileSystem.js` - Dual-runtime file system adapter
+- `src/lib/utils.ts` - `cn()` utility (clsx + tailwind-merge)
+- `src/services/fileSystem.ts` - Dual-runtime file system adapter
 - `server/main.go` - Go HTTP/WebSocket server
 - `electron/main.cjs` - Electron main process
 - `electron/preload.cjs` - Electron preload (contextBridge)

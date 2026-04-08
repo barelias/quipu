@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { useWorkspace } from '../../context/WorkspaceContext';
+import { useFileSystem } from '../../context/FileSystemContext';
+import { useTab } from '../../context/TabContext';
 import searchService from '../../services/searchService';
 
 interface SearchMatch {
@@ -25,7 +26,8 @@ interface SearchPanelProps {
 }
 
 export default function SearchPanel({ activePanel }: SearchPanelProps) {
-  const { workspacePath, openFile } = useWorkspace();
+  const { workspacePath } = useFileSystem();
+  const { openFile } = useTab();
   const [query, setQuery] = useState<string>('');
   const [results, setResults] = useState<SearchMatch[] | null>(null);
   const [isSearching, setIsSearching] = useState<boolean>(false);

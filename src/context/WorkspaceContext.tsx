@@ -2,25 +2,13 @@ import React, { useEffect } from 'react';
 import storage from '../services/storageService';
 import { FileSystemProvider, useFileSystem } from './FileSystemContext';
 import { TabProvider, useTab } from './TabContext';
-import { TerminalProvider, useTerminal } from './TerminalContext';
-import type { FileSystemContextValue } from './FileSystemContext';
-import type { TabContextValue } from './TabContext';
-import type { TerminalContextValue } from './TerminalContext';
+import { TerminalProvider } from './TerminalContext';
 
 interface SessionSnapshot {
   openFilePaths: Array<{ path: string; scrollPosition: number }>;
   activeFilePath: string | null;
   expandedFolders: string[];
 }
-
-/**
- * WorkspaceContextValue is the union of all sub-context values.
- * Tab-aware deleteEntry/renameEntry from TabContext override the FileSystem versions.
- */
-export type WorkspaceContextValue =
-  Omit<FileSystemContextValue, 'deleteEntry' | 'renameEntry'> &
-  TabContextValue &
-  TerminalContextValue;
 
 /**
  * SessionPersistence observes openTabs, activeTabId (from TabContext),
@@ -49,25 +37,15 @@ function SessionPersistence({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-interface WorkspaceProviderProps {
-  children: React.ReactNode;
-}
-
 /**
  * Composes all contexts into a single provider tree.
  *
- * Provider nesting order:
- * <FileSystemProvider>
- *   <TabProvider>
- *     <TerminalProvider>
- *       <SessionPersistence>
- *         {children}
- *       </SessionPersistence>
- *     </TerminalProvider>
- *   </TabProvider>
- * </FileSystemProvider>
+ * Nesting order: FileSystemProvider > TabProvider > TerminalProvider
+ * - TabContext consumes workspacePath from FileSystemContext
+ * - TerminalContext is self-contained
+ * - SessionPersistence observes both Tab and FileSystem state
  */
-export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
+export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   return (
     <FileSystemProvider>
       <TabProvider>
@@ -79,21 +57,4 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       </TabProvider>
     </FileSystemProvider>
   );
-}
-
-/**
- * Backward-compatible hook that combines all sub-context values.
- * Tab-aware deleteEntry/renameEntry from TabContext override FileSystem versions.
- * Will be removed in Unit 8 when consumers are migrated to specific hooks.
- */
-export function useWorkspace(): WorkspaceContextValue {
-  const fileSystem = useFileSystem();
-  const tab = useTab();
-  const terminal = useTerminal();
-
-  return {
-    ...fileSystem,
-    ...tab,
-    ...terminal,
-  };
 }

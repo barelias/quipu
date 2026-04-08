@@ -10,7 +10,7 @@ import {
 import fs from "../../services/fileSystem";
 import frameService from "../../services/frameService";
 import type { FrameAnnotation } from "../../services/frameService";
-import { useWorkspace } from "../../context/WorkspaceContext";
+import { useFileSystem } from "../../context/FileSystemContext";
 import type { Tab } from "../../types/tab";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -100,7 +100,7 @@ const pdfOptions = {
 
 const PdfViewer: React.FC<PdfViewerProps> = ({ tab }) => {
   const filePath: string = tab.path;
-  const { workspacePath } = useWorkspace() as { workspacePath: string | null };
+  const { workspacePath } = useFileSystem();
   const [numPages, setNumPages] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoomPercent, setZoomPercent] = useState<number>(100); // 100% = fit to container
