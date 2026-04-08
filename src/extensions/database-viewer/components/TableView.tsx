@@ -57,8 +57,16 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
 
   if (schema.columns.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-text-tertiary text-sm">
-        No columns defined yet. Add a column to get started.
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 text-page-text/40 text-sm py-16">
+        <p>No columns yet</p>
+        {onAddColumn && (
+          <button
+            onClick={onAddColumn}
+            className="px-4 py-2 rounded-md bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
+          >
+            + Add first column
+          </button>
+        )}
       </div>
     );
   }
@@ -185,9 +193,8 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
         <button
           onClick={handleAddRow}
           className={cn(
-            'w-full text-left px-3 py-2 text-sm text-text-tertiary',
-            'hover:bg-bg-surface/50 hover:text-text-secondary transition-colors',
-            'border-b border-border/20',
+            'w-full text-left px-3 py-2 text-sm text-page-text/30',
+            'hover:bg-page-text/[0.03] hover:text-page-text/60 transition-colors',
           )}
         >
           + New row
