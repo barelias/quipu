@@ -81,16 +81,21 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentCh
   }, [addColumn]);
 
   return (
-    <div className="flex-1 flex flex-col bg-bg-base overflow-hidden">
+    <div className="flex-1 flex flex-col bg-page-bg overflow-hidden">
+      {/* Header */}
+      <div className="shrink-0 px-16 pt-10 pb-2 max-[1200px]:px-8 max-[1150px]:px-4">
+        <h1 className="text-2xl font-bold text-page-text mb-1">{schema.name}</h1>
+        <div className="flex items-center gap-3 text-xs text-page-text/50">
+          <span>
+            {filteredRows.length === rows.length
+              ? `${rows.length} row${rows.length !== 1 ? 's' : ''}`
+              : `${filteredRows.length} of ${rows.length} row${rows.length !== 1 ? 's' : ''}`}
+          </span>
+        </div>
+      </div>
+
       {/* Toolbar */}
-      <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-bg-elevated border-b border-border">
-        <span className="text-sm font-medium text-text-primary">{schema.name}</span>
-        <span className="text-xs text-text-tertiary">
-          {filteredRows.length === rows.length
-            ? `${rows.length} row${rows.length !== 1 ? 's' : ''}`
-            : `${filteredRows.length} of ${rows.length} row${rows.length !== 1 ? 's' : ''}`}
-          {' '}&middot; {schema.columns.length} column{schema.columns.length !== 1 ? 's' : ''}
-        </span>
+      <div className="shrink-0 flex items-center gap-2 px-16 py-1.5 border-b border-border/30 max-[1200px]:px-8 max-[1150px]:px-4">
 
         {/* Filter and sort controls */}
         <FilterBar

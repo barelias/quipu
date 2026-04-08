@@ -75,7 +75,7 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
           style={{ width: table.getCenterTotalSize() }}
         >
           {/* Header */}
-          <thead className="sticky top-0 z-10 bg-bg-elevated">
+          <thead className="sticky top-0 z-10 bg-page-bg">
             {table.getHeaderGroups().map(headerGroup => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map(header => (
@@ -83,8 +83,8 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
                   <th
                     key={header.id}
                     className={cn(
-                      'relative text-left px-3 py-2 text-text-secondary font-medium text-xs uppercase tracking-wide',
-                      'border-b border-r border-border select-none',
+                      'relative text-left px-3 py-1.5 text-page-text/50 font-medium text-xs tracking-wide',
+                      'border-b border-border/30 select-none',
                     )}
                     style={{ width: header.getSize() }}
                   >
@@ -147,14 +147,14 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
               return (
                 <tr
                   key={row.id}
-                  className="border-b border-border/30 hover:bg-bg-surface/50 transition-colors"
+                  className="border-b border-border/20 hover:bg-page-text/[0.03] transition-colors"
                   style={{ height: ROW_HEIGHT }}
                 >
                   {row.getVisibleCells().map(cell => (
                     <td
                       key={cell.id}
                       className={cn(
-                        'px-3 py-1.5 text-sm text-text-primary border-r border-border/20',
+                        'px-3 py-1.5 text-sm text-page-text',
                         'overflow-hidden text-ellipsis whitespace-nowrap',
                       )}
                       style={{ width: cell.column.getSize() }}
@@ -195,7 +195,7 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
       </div>
 
       {/* Status bar */}
-      <div className="shrink-0 flex items-center px-3 py-1 bg-bg-elevated border-t border-border text-xs text-text-tertiary">
+      <div className="shrink-0 flex items-center px-3 py-1 border-t border-border/20 text-xs text-page-text/40">
         {tableRows.length === rows.length
           ? `${rows.length} row${rows.length !== 1 ? 's' : ''}`
           : `${tableRows.length} of ${rows.length} rows (filtered)`}

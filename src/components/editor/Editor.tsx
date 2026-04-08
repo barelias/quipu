@@ -305,11 +305,6 @@ const Editor: React.FC<EditorProps> = ({
     }, []);
 
 
-    const displayTitle = useMemo<string>(() => {
-        if (!activeFile?.name) return '';
-        return activeFile.name.replace(/\.(md|markdown|quipu)$/i, '');
-    }, [activeFile?.name]);
-
     // New state for adjusted positions
     const [adjustedPositions, setAdjustedPositions] = useState<Record<number, number>>({});
 
@@ -1184,18 +1179,17 @@ const Editor: React.FC<EditorProps> = ({
             <div
                 ref={editorScrollRef}
                 className={cn(
-                    "flex-1 flex justify-center items-start overflow-y-auto relative",
-                    "py-12 px-16",
+                    "flex-1 flex justify-center items-start overflow-y-auto relative bg-page-bg",
+                    "pt-0 pb-12 px-16",
                     "max-[1400px]:justify-start max-[1400px]:pl-12",
-                    "max-[1200px]:overflow-x-auto max-[1200px]:p-8",
-                    "max-[1150px]:py-6 max-[1150px]:px-4",
+                    "max-[1200px]:overflow-x-auto max-[1200px]:px-8 max-[1200px]:pb-8",
+                    "max-[1150px]:pb-6 max-[1150px]:px-4",
                 )}
             >
                 <div
                     className={cn(
-                        "w-[816px] min-h-[1056px] bg-page-bg rounded border border-page-border",
-                        "shadow-[0_1px_3px_rgba(0,0,0,0.08),0_4px_12px_rgba(0,0,0,0.06),0_12px_30px_rgba(0,0,0,0.05)]",
-                        "p-16 relative shrink-0 transition-[width,transform] duration-300",
+                        "w-[816px] bg-page-bg",
+                        "pt-6 pb-16 px-16 relative shrink-0 transition-[width,transform] duration-300",
                         "max-[1150px]:w-full max-[1150px]:max-w-[816px]",
                     )}
                     style={zoomLevel !== 100 ? {
@@ -1206,7 +1200,7 @@ const Editor: React.FC<EditorProps> = ({
                     onContextMenu={handleEditorContextMenu}
                 >
                     {activeTab && (activeTab.frontmatter || activeTab.frontmatterRaw) && (
-                        <div className="-mx-16 -mt-16 mb-6 rounded-t border-b border-page-border">
+                        <div className="-mx-16 -mt-6 mb-6 border-b border-border/30">
                             <FrontmatterProperties
                                 frontmatter={activeTab.frontmatter}
                                 frontmatterRaw={activeTab.frontmatterRaw}
@@ -1222,11 +1216,6 @@ const Editor: React.FC<EditorProps> = ({
                                 onUpdateTag={updateFrontmatterTag}
                             />
                         </div>
-                    )}
-                    {displayTitle && (
-                        <h1 className="text-3xl font-bold font-editor text-page-text select-none break-words mb-4">
-                            {displayTitle}
-                        </h1>
                     )}
                     {showMenu && (
                         <div
