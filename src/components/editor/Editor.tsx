@@ -31,6 +31,7 @@ import type { SlashCommandItem } from './extensions/SlashCommand';
 import FindBar from './FindBar';
 import SlashCommandMenu from './SlashCommandMenu';
 import type { SlashCommandMenuRef } from './SlashCommandMenu';
+import CommentPanel from './CommentPanel';
 import FrontmatterProperties from './FrontmatterProperties';
 import frameService from '../../services/frameService';
 import fs from '../../services/fileSystem';
@@ -171,6 +172,7 @@ const Editor: React.FC<EditorProps> = ({
     const recentFrameSaveRef = useRef<number>(0); // timestamp of our last FRAME write
 
     const [showFindBar, setShowFindBar] = useState<boolean>(false);
+    const [commentsOverflow, setCommentsOverflow] = useState<boolean>(false);
 
     // Editor mode: 'richtext' (default) or 'obsidian'
     const [editorMode, setEditorMode] = useState<EditorMode>(() => {
@@ -301,6 +303,19 @@ const Editor: React.FC<EditorProps> = ({
         el.addEventListener('wheel', handler, { passive: false });
         return () => el.removeEventListener('wheel', handler);
     }, [handleZoomIn, handleZoomOut]);
+
+    // Detect if comments track has enough space (816px doc + 300px comments + 64px margins)
+    useEffect(() => {
+        const el = editorScrollRef.current;
+        if (!el) return;
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setCommentsOverflow(entry.contentRect.width < 1180);
+            }
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, []);
 
     // Table context menu state
     const [tableContextMenu, setTableContextMenu] = useState<TableContextMenuPosition | null>(null);
@@ -1109,6 +1124,47 @@ const Editor: React.FC<EditorProps> = ({
         }
     };
 
+    const scrollToComment = useCallback((commentId: string) => {
+        if (!editor) return;
+        // Find the comment mark position and scroll to it
+        editor.state.doc.descendants((node, pos) => {
+            const mark = node.marks?.find(m => m.type.name === 'comment' && m.attrs.id === commentId);
+            if (mark) {
+                editor.chain().focus().setTextSelection(pos).run();
+                // Scroll the editor to the position
+                const dom = editor.view.domAtPos(pos);
+                if (dom.node instanceof HTMLElement) {
+                    dom.node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else if (dom.node.parentElement) {
+                    dom.node.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                return false; // stop iteration
+            }
+        });
+    }, [editor]);
+
+    const handleCommentTypeChange = useCallback((commentId: string, newType: string) => {
+        setComments(prev => prev.map(cm =>
+            cm.id === commentId ? { ...cm, type: newType } : cm
+        ));
+        if (workspacePath && activeFile?.path) {
+            frameService.readFrame(workspacePath, activeFile.path).then(frame => {
+                if (!frame?.annotations) return;
+                const ann = frame.annotations.find((a: { id: string }) => a.id === commentId);
+                if (ann) {
+                    ann.type = newType;
+                    frame.updatedAt = new Date().toISOString();
+                    const relativePath = activeFile.path.startsWith(workspacePath + '/')
+                        ? activeFile.path.substring(workspacePath.length + 1)
+                        : activeFile.path;
+                    const framePath = `${workspacePath}/.quipu/meta/${relativePath}.frame.json`;
+                    recentFrameSaveRef.current = Date.now();
+                    fs.writeFile(framePath, JSON.stringify(frame, null, 2));
+                }
+            }).catch(() => {});
+        }
+    }, [workspacePath, activeFile]);
+
     return (
         <div className="flex flex-col h-full w-full bg-bg-surface overflow-hidden relative">
             {editorMode === 'richtext' && editor && (
@@ -1384,8 +1440,18 @@ const Editor: React.FC<EditorProps> = ({
                     </div>
                 </div>
 
-                {/* Floating Comments Track */}
-                <div className={cn(
+                {/* Comment Panel (collapsed mode when viewport is narrow) */}
+                {commentsOverflow && comments.length > 0 && (
+                    <CommentPanel
+                        comments={comments}
+                        onResolve={resolveComment}
+                        onChangeType={handleCommentTypeChange}
+                        onScrollTo={scrollToComment}
+                    />
+                )}
+
+                {/* Floating Comments Track (wide viewport only) */}
+                {!commentsOverflow && <div className={cn(
                     "absolute top-8 w-[300px] bottom-0 pointer-events-none",
                     "left-[calc(50%+408px+1rem)]",
                     "max-[1400px]:left-[867px]",
@@ -1498,7 +1564,7 @@ const Editor: React.FC<EditorProps> = ({
                             <div className="text-xs text-text-secondary border-l-2 border-warning pl-2 italic whitespace-nowrap overflow-hidden text-ellipsis">"{c.text}"</div>
                         </div>
                     ))}
-                </div>
+                </div>}
 
                 {/* Table Context Menu */}
                 {tableContextMenu && (
