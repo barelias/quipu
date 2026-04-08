@@ -7,6 +7,9 @@ const descriptor: ExtensionDescriptor = {
   canHandle(tab, activeFile) { return isMermaidFile(activeFile?.name ?? ''); },
   priority: 10,
   component: MermaidViewer,
+  onSave: async (tab) => {
+    return typeof tab.content === 'string' ? tab.content : null;
+  },
 };
 
 export default descriptor;

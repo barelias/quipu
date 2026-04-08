@@ -6,7 +6,7 @@
  */
 
 import type { ComponentType } from 'react';
-import type { ExtensionDescriptor } from '@/types/extensions';
+import type { ExtensionDescriptor, ExtensionCommand } from '@/types/extensions';
 import type { Tab, ActiveFile } from '@/types/tab';
 
 const extensions: ExtensionDescriptor[] = [];
@@ -25,6 +25,25 @@ export function resolveViewer(tab: Tab, activeFile: ActiveFile | null): Componen
     if (ext.canHandle(tab, activeFile)) return ext.component;
   }
   return null;
+}
+
+/**
+ * Returns the full ExtensionDescriptor for a tab, or null if no extension matches.
+ */
+export function getExtensionForTab(tab: Tab, activeFile?: ActiveFile | null): ExtensionDescriptor | null {
+  const file = activeFile ?? { path: tab.path, name: tab.name, content: tab.content, isQuipu: tab.isQuipu };
+  for (const ext of extensions) {
+    if (ext.canHandle(tab, file)) return ext;
+  }
+  return null;
+}
+
+/**
+ * Returns commands from the matching extension for a tab, or an empty array.
+ */
+export function getCommandsForTab(tab: Tab, activeFile?: ActiveFile | null): ExtensionCommand[] {
+  const ext = getExtensionForTab(tab, activeFile);
+  return ext?.commands ?? [];
 }
 
 export function getRegisteredExtensions(): ExtensionDescriptor[] {

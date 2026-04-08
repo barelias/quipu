@@ -5,7 +5,7 @@ import fileWatcher from '../services/fileWatcher';
 import frameService from '../services/frameService';
 import storage from '../services/storageService';
 import { useToast } from '../components/ui/Toast';
-import { isCodeFile, isMermaidFile, isNotebookFile } from '../utils/fileTypes';
+import { getExtensionForTab } from '../extensions/registry';
 import { useFileSystem } from './FileSystemContext';
 import type { Tab, ActiveFile, Frontmatter } from '../types/tab';
 import type { JSONContent } from '@tiptap/react';
@@ -309,7 +309,6 @@ export function TabProvider({ children }: TabProviderProps) {
           isDirty: false,
           isQuipu: isQuipu && !!parsedContent,
           isMarkdown,
-          isNotebook: isNotebookFile(fileName),
           scrollPosition: scrollPosition ?? 0,
           frontmatter,
           frontmatterRaw,
@@ -443,7 +442,6 @@ export function TabProvider({ children }: TabProviderProps) {
         isDirty: false,
         isQuipu: isQuipu && !!parsedContent,
         isMarkdown,
-        isNotebook: isNotebookFile(fileName),
         scrollPosition: 0,
         frontmatter,
         frontmatterRaw,
@@ -501,14 +499,16 @@ export function TabProvider({ children }: TabProviderProps) {
     // NEVER write to binary files — they would be corrupted
     if (activeTab.isPdf || activeTab.isMedia || /\.pdf$/i.test(activeTab.name)) return;
 
-    // For non-TipTap files (e.g., excalidraw), save tab content directly
-    const isNonTipTapFile = activeTab.name.endsWith('.excalidraw') || activeTab.isMedia || isCodeFile(activeTab.name) || isMermaidFile(activeTab.name);
-    if ((isNonTipTapFile || !editorInstance) && activeTab.content) {
+    // Check if an extension handles saving for this file type
+    const ext = getExtensionForTab(activeTab);
+    if (ext?.onSave) {
       try {
+        const content = await ext.onSave(activeTab, editorInstance);
+        if (content === null) return;
         recentSavesRef.current.set(activeTab.path, Date.now());
-        await fs.writeFile(activeTab.path, activeTab.content as string);
+        await fs.writeFile(activeTab.path, content);
         setOpenTabs(prev => prev.map(t =>
-          t.id === activeTab.id ? { ...t, isDirty: false, diskContent: activeTab.content as string, hasConflict: false, conflictDiskContent: null } : t
+          t.id === activeTab.id ? { ...t, isDirty: false, diskContent: content, hasConflict: false, conflictDiskContent: null } : t
         ));
         showToast('File saved', 'success');
       } catch (err: unknown) {

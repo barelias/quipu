@@ -20,9 +20,8 @@ import { ToastProvider, useToast } from './components/ui/Toast';
 import frameService from './services/frameService';
 import claudeInstaller from './services/claudeInstaller';
 import DiffViewer from './extensions/diff-viewer/DiffViewer';
-import { resolveViewer } from './extensions/registry';
+import { resolveViewer, getExtensionForTab, getCommandsForTab } from './extensions/registry';
 import './extensions'; // register all viewer extensions
-import type { ActiveFile } from './types/tab';
 
 interface ContextMenuItem {
   label?: string;
@@ -87,8 +86,7 @@ function AppContent() {
     if (prevId && prevId !== activeTabId) {
       // Check if the NEW active tab will NOT use the Editor component
       const newTab = openTabs.find(t => t.id === activeTabId);
-      const newActiveFile: ActiveFile | null = newTab ? { path: newTab.path, name: newTab.name, content: newTab.content, isQuipu: newTab.isQuipu } : null;
-      const isNewTabNonEditor = newTab && resolveViewer(newTab, newActiveFile) !== null;
+      const isNewTabNonEditor = newTab && getExtensionForTab(newTab) !== null;
 
       // Only snapshot here if Editor is about to unmount (non-Editor tab)
       // For Editor-to-Editor switches, Editor.jsx handles the snapshot internally
@@ -257,7 +255,8 @@ function AppContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         if (activeFile && activeTab) {
-          const isNonTipTap = resolveViewer(activeTab, activeFile) !== null || editorRawMode;
+          const ext = getExtensionForTab(activeTab);
+          const isNonTipTap = ext !== null || editorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
       }
@@ -580,7 +579,8 @@ function AppContent() {
     switch (action) {
       case 'file.save':
         if (activeFile && activeTab) {
-          const isNonTipTap = resolveViewer(activeTab, activeFile) !== null || editorRawMode;
+          const ext = getExtensionForTab(activeTab);
+          const isNonTipTap = ext !== null || editorRawMode;
           saveFile(isNonTipTap ? null : editorInstance);
         }
         break;
@@ -644,13 +644,17 @@ function AppContent() {
       case 'editor.toggleMode':
         toggleEditorModeRef.current?.();
         break;
-      case 'kernel.runAll':
-      case 'kernel.interrupt':
-      case 'kernel.restart':
-        window.dispatchEvent(new CustomEvent('quipu:kernel-command', { detail: action }));
+      default: {
+        // Delegate to extension commands (e.g., kernel.runAll, kernel.interrupt, kernel.restart)
+        if (activeTab) {
+          const cmds = getCommandsForTab(activeTab);
+          const cmd = cmds.find(c => c.id === action);
+          if (cmd) cmd.handler();
+        }
         break;
+      }
     }
-  }, [editorInstance, activeFile, saveFile, activeTabId, closeTab, sidePanelRef, terminalPanelRef, handlePanelToggle, handleToggleSidebar, handleToggleTerminal, createTerminalTab, toggleTheme, handleSendToTerminal, handleSendToClaude]);
+  }, [editorInstance, editorRawMode, activeFile, activeTab, saveFile, activeTabId, closeTab, sidePanelRef, terminalPanelRef, handlePanelToggle, handleToggleSidebar, handleToggleTerminal, createTerminalTab, toggleTheme, handleSendToTerminal, handleSendToClaude]);
 
   // Build title
   let title = 'Quipu';

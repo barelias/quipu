@@ -7,6 +7,9 @@ const descriptor: ExtensionDescriptor = {
   canHandle(tab, activeFile) { return isExcalidrawFile(activeFile?.name ?? ''); },
   priority: 10,
   component: ExcalidrawViewer,
+  onSave: async (tab) => {
+    return typeof tab.content === 'string' ? tab.content : null;
+  },
 };
 
 export default descriptor;

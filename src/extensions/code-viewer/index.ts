@@ -9,6 +9,9 @@ const descriptor: ExtensionDescriptor = {
   },
   priority: 5,
   component: CodeViewer,
+  onSave: async (tab) => {
+    return typeof tab.content === 'string' ? tab.content : null;
+  },
 };
 
 export default descriptor;
