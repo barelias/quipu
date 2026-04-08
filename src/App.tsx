@@ -736,13 +736,24 @@ function AppContent() {
       });
     };
 
+    const handleOpenEmbeddedDatabase = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const src = detail?.src as string;
+      if (!src || !workspacePath) return;
+      const fullPath = src.startsWith('/') ? src : `${workspacePath}/${src}`;
+      const fileName = src.split('/').pop() || src;
+      openFile(fullPath, fileName);
+    };
+
     window.addEventListener('quipu:pick-database', handlePickDatabase);
     window.addEventListener('quipu:create-database', handleCreateDatabase);
+    window.addEventListener('quipu:open-embedded-database', handleOpenEmbeddedDatabase);
     return () => {
       window.removeEventListener('quipu:pick-database', handlePickDatabase);
       window.removeEventListener('quipu:create-database', handleCreateDatabase);
+      window.removeEventListener('quipu:open-embedded-database', handleOpenEmbeddedDatabase);
     };
-  }, [workspacePath, activeFile]);
+  }, [workspacePath, activeFile, openFile]);
 
   // Build title
   let title = 'Quipu';
@@ -751,7 +762,7 @@ function AppContent() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen">
+    <div className="flex flex-col h-screen w-screen" data-workspace-path={workspacePath ?? ''}>
       {contextMenu && (
         <ContextMenu
           items={contextMenu.items}
