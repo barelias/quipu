@@ -25,7 +25,12 @@ import { BlockDragHandle } from './extensions/BlockDragHandle';
 import { FindReplace } from './extensions/FindReplace';
 import { WikiLink, wikiLinksToHTML } from './extensions/WikiLink';
 import { CodeBlockWithLang } from './extensions/CodeBlockWithLang';
+import { EmbeddedDatabase } from './extensions/EmbeddedDatabase';
+import { SlashCommand } from './extensions/SlashCommand';
+import type { SlashCommandItem } from './extensions/SlashCommand';
 import FindBar from './FindBar';
+import SlashCommandMenu from './SlashCommandMenu';
+import type { SlashCommandMenuRef } from './SlashCommandMenu';
 import FrontmatterProperties from './FrontmatterProperties';
 import frameService from '../../services/frameService';
 import fs from '../../services/fileSystem';
@@ -299,9 +304,15 @@ const Editor: React.FC<EditorProps> = ({
 
     // Table context menu state
     const [tableContextMenu, setTableContextMenu] = useState<TableContextMenuPosition | null>(null);
+    // General editor context menu state
+    const [editorContextMenu, setEditorContextMenu] = useState<{ x: number; y: number } | null>(null);
 
     const closeTableMenu = useCallback(() => {
         setTableContextMenu(null);
+    }, []);
+
+    const closeEditorMenu = useCallback(() => {
+        setEditorContextMenu(null);
     }, []);
 
 
@@ -431,6 +442,72 @@ const Editor: React.FC<EditorProps> = ({
                 bulletListMarker: '-',
                 transformPastedText: true,
                 transformCopiedText: true,
+            }),
+            EmbeddedDatabase,
+            SlashCommand.configure({
+                suggestion: {
+                    render: () => {
+                        let component: HTMLDivElement | null = null;
+                        let root: any = null; // ReactDOM root
+                        let menuRef: SlashCommandMenuRef | null = null;
+
+                        return {
+                            onStart: (props: any) => {
+                                component = document.createElement('div');
+                                component.style.position = 'absolute';
+                                component.style.zIndex = '9999';
+                                document.body.appendChild(component);
+
+                                const rect = props.clientRect?.();
+                                if (rect && component) {
+                                    component.style.left = `${rect.left}px`;
+                                    component.style.top = `${rect.bottom + 4}px`;
+                                }
+
+                                // Use dynamic import to avoid circular deps
+                                import('react-dom/client').then(({ createRoot }) => {
+                                    if (!component) return;
+                                    root = createRoot(component);
+                                    root.render(
+                                        <SlashCommandMenu
+                                            ref={(ref: SlashCommandMenuRef | null) => { menuRef = ref; }}
+                                            items={props.items}
+                                            command={props.command}
+                                        />
+                                    );
+                                });
+                            },
+                            onUpdate: (props: any) => {
+                                const rect = props.clientRect?.();
+                                if (rect && component) {
+                                    component.style.left = `${rect.left}px`;
+                                    component.style.top = `${rect.bottom + 4}px`;
+                                }
+                                root?.render(
+                                    <SlashCommandMenu
+                                        ref={(ref: SlashCommandMenuRef | null) => { menuRef = ref; }}
+                                        items={props.items}
+                                        command={props.command}
+                                    />
+                                );
+                            },
+                            onKeyDown: (props: any) => {
+                                if (props.event.key === 'Escape') {
+                                    // Insert literal "/" and close
+                                    return true;
+                                }
+                                return menuRef?.onKeyDown(props.event) ?? false;
+                            },
+                            onExit: () => {
+                                root?.unmount();
+                                component?.remove();
+                                component = null;
+                                root = null;
+                                menuRef = null;
+                            },
+                        };
+                    },
+                },
             }),
             RevealMarkdown,
             BlockDragHandle,
@@ -573,8 +650,10 @@ const Editor: React.FC<EditorProps> = ({
         if (isInTable) {
             e.preventDefault();
             setTableContextMenu({ x: e.clientX, y: e.clientY });
+        } else {
+            e.preventDefault();
+            setEditorContextMenu({ x: e.clientX, y: e.clientY });
         }
-        // else: allow native context menu
     }, [editor]);
 
     // Close table context menu on click outside, Escape, or scroll
@@ -597,6 +676,41 @@ const Editor: React.FC<EditorProps> = ({
             document.removeEventListener('scroll', handleScroll, true);
         };
     }, [tableContextMenu, closeTableMenu]);
+
+    // Close general editor context menu
+    useEffect(() => {
+        if (!editorContextMenu) return;
+
+        const handleClick = (): void => closeEditorMenu();
+        const handleKeyDown = (e: globalThis.KeyboardEvent): void => {
+            if (e.key === 'Escape') closeEditorMenu();
+        };
+
+        document.addEventListener('click', handleClick);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('click', handleClick);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [editorContextMenu, closeEditorMenu]);
+
+    const handleInsertDatabase = useCallback(() => {
+        if (!editor) return;
+        closeEditorMenu();
+        // Dispatch event to pick a database file
+        const event = new CustomEvent('quipu:pick-database', {
+            detail: {
+                callback: (filePath: string) => {
+                    editor.chain().focus().insertContent({
+                        type: 'embeddedDatabase',
+                        attrs: { src: filePath },
+                    }).run();
+                },
+            },
+        });
+        window.dispatchEvent(event);
+    }, [editor, closeEditorMenu]);
 
     // Keep editor ref in sync for toggleEditorMode
     useEffect(() => { editorRefForToggle.current = editor; }, [editor]);
@@ -1429,6 +1543,28 @@ const Editor: React.FC<EditorProps> = ({
                             onClick={() => { editor.chain().focus().deleteTable().run(); closeTableMenu(); }}
                         >
                             Delete Table
+                        </div>
+                    </div>
+                )}
+
+                {/* General Editor Context Menu */}
+                {editorContextMenu && (
+                    <div
+                        className="fixed z-50 bg-bg-overlay border border-border rounded-md shadow-lg py-1 min-w-[180px]"
+                        style={{
+                            top: editorContextMenu.y,
+                            left: editorContextMenu.x,
+                            ...(editorContextMenu.x + 180 > window.innerWidth
+                                ? { left: editorContextMenu.x - 180 }
+                                : {}),
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                    >
+                        <div
+                            className="py-1.5 px-4 cursor-pointer text-[13px] text-text-secondary hover:bg-accent hover:text-white"
+                            onClick={handleInsertDatabase}
+                        >
+                            Link Database
                         </div>
                     </div>
                 )}
