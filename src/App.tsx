@@ -13,6 +13,7 @@ import SourceControlPanel from './components/ui/SourceControlPanel';
 import QuickOpen from './components/ui/QuickOpen';
 import TitleBar from './components/ui/TitleBar';
 import ContextMenu from './components/ui/ContextMenu';
+import FolderPicker from './components/ui/FolderPicker';
 import FileConflictBar from './components/ui/FileConflictBar';
 import { WorkspaceProvider } from './context/WorkspaceContext';
 import { useFileSystem } from './context/FileSystemContext';
@@ -52,7 +53,7 @@ function AppContent() {
   const toggleEditorModeRef = React.useRef<(() => void) | null>(null);
   const toggleFindRef = React.useRef<(() => void) | null>(null);
   const {
-    workspacePath, showFolderPicker, selectFolder, cancelFolderPicker, revealFolder,
+    workspacePath, showFolderPicker, selectFolder, cancelFolderPicker, revealFolder, openFolder,
   } = useFileSystem();
   const {
     activeFile, saveFile, setIsDirty, updateTabContent, openFile,
@@ -600,6 +601,9 @@ function AppContent() {
       case 'file.closeTab':
         if (activeTabId) closeTab(activeTabId);
         break;
+      case 'file.openFolder':
+        openFolder();
+        break;
       case 'edit.undo':
         editorInstance?.commands.undo();
         break;
@@ -771,26 +775,7 @@ function AppContent() {
         />
       )}
       {showFolderPicker && (
-        <Dialog.Root open onOpenChange={(open) => { if (!open) cancelFolderPicker(); }}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 bg-black/35 z-[9998]" />
-            <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-bg-elevated border border-border rounded-lg shadow-lg p-5 w-[400px] z-[9999]">
-              <Dialog.Title className="text-sm font-medium text-text-primary mb-3">Open Folder</Dialog.Title>
-              <form onSubmit={(e) => { e.preventDefault(); const input = (e.target as HTMLFormElement).elements.namedItem('path') as HTMLInputElement; if (input.value.trim()) selectFolder(input.value.trim()); }}>
-                <input
-                  name="path"
-                  autoFocus
-                  placeholder="Enter folder path..."
-                  className="w-full px-3 py-2 text-sm bg-bg-surface border border-border rounded-md text-text-primary outline-none focus:border-accent mb-3"
-                />
-                <div className="flex justify-end gap-2">
-                  <button type="button" onClick={cancelFolderPicker} className="px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary">Cancel</button>
-                  <button type="submit" className="px-3 py-1.5 text-sm bg-accent text-white rounded-md hover:bg-accent-hover">Open</button>
-                </div>
-              </form>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+        <FolderPicker onSelect={selectFolder} onCancel={cancelFolderPicker} />
       )}
 
       {/* Input dialog (replaces window.prompt) */}
