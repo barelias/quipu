@@ -50,6 +50,7 @@
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
+    "adm-zip": "^0.5.17",
     "ansi-to-react": "^6.2.6",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -67,6 +68,7 @@
     "react-dom": "^19.2.0",
     "react-pdf": "^10.4.1",
     "react-resizable-panels": "^4.7.0",
+    "semver": "^7.7.4",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",
@@ -80,6 +82,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
+    "@types/semver": "^7.7.1",
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
@@ -166,19 +169,31 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.developer-tools"
     },
     "dmg": {
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "linux": {
