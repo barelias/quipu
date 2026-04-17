@@ -3,6 +3,7 @@ import type { PanelDescriptor } from '../types/plugin-types';
 import FileExplorer from '../components/ui/FileExplorer';
 import SearchPanel from '../components/ui/SearchPanel';
 import SourceControlPanel from '../components/ui/SourceControlPanel';
+import PluginManager from '../components/ui/PluginManager';
 
 // ---------------------------------------------------------------------------
 // Git badge count — written each render by ActivityBar before reading panels
@@ -64,4 +65,13 @@ registerPanel({
   component: SourceControlPanel as unknown as ComponentType<any>,
   order: 2,
   badge: () => (_gitBadgeCount > 0 ? _gitBadgeCount : null),
+});
+
+registerPanel({
+  id: 'plugin-manager',
+  label: 'Plugins',
+  icon: 'PuzzlePieceIcon',
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  component: PluginManager as unknown as ComponentType<any>,
+  order: 99,
 });

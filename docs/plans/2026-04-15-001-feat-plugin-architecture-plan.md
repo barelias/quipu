@@ -527,7 +527,7 @@ Place after context providers are mounted — `showToast` must be available.
 
 ---
 
-- [ ] **U8: Plugin Registry Service**
+- [x] **U8: Plugin Registry Service**
 
 **Goal:** HTTP client for the plugin registry (hosted on GitHub Pages). Fetches and caches plugin entries for 1 hour.
 
@@ -573,7 +573,7 @@ interface PluginRegistryService {
 
 ---
 
-- [ ] **U9: First-Run Wizard + Plugin Manager**
+- [x] **U9: First-Run Wizard + Plugin Manager**
 
 **Goal:** First-run wizard shown before workspace on first launch. Plugin Manager panel for install/uninstall/update of installed plugins.
 

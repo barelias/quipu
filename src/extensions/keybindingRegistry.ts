@@ -27,10 +27,12 @@ export function registerKeybinding(entry: KeybindingEntry): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Normalizes a KeyboardEvent into a lowercase combination string such as
- * "ctrl+shift+g" or "cmd+shift+g" (on macOS). Returns null if no registered
- * plugin keybinding matches; the caller is responsible for checking built-ins
- * first so they always take precedence.
+ * Finds the first registered keybinding that matches the given KeyboardEvent,
+ * calls e.preventDefault(), executes the bound command, and returns its ID.
+ * Returns null if no binding matches.
+ *
+ * Built-in keybindings are registered before plugin ones, so they always win
+ * when the same key combo is registered by multiple sources.
  */
 export function resolveKeybinding(e: KeyboardEvent): string | null {
   const normalized = normalizeEvent(e);
@@ -39,6 +41,7 @@ export function resolveKeybinding(e: KeyboardEvent): string | null {
   for (const binding of _bindings) {
     const target = (isMac ? (binding.mac ?? binding.key) : binding.key).toLowerCase();
     if (target === normalized) {
+      e.preventDefault();
       executeCommand(binding.commandId);
       return binding.commandId;
     }

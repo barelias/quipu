@@ -30,6 +30,8 @@ import { registerCommand, executeCommand } from './extensions/commandRegistry';
 import { registerKeybinding, resolveKeybinding } from './extensions/keybindingRegistry';
 import pluginLoader, { createPluginApi } from './services/pluginLoader';
 import type { PluginApi } from './types/plugin-types';
+import { builtinKeybindings } from './data/builtinKeybindings';
+import FirstRunWizard from './components/ui/FirstRunWizard';
 import './extensions'; // register all viewer extensions
 
 interface ContextMenuItem {
@@ -87,6 +89,7 @@ function AppContent() {
   } | null>(null);
   const [inputDialogValue, setInputDialogValue] = useState('');
   const [activeDiff, setActiveDiff] = useState<ActiveDiff | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
 
   // Derive isClaudeRunning from the active terminal tab
   const activeTerminalTab = terminalTabs.find(t => t.id === activeTerminalId);
@@ -120,9 +123,9 @@ function AppContent() {
   }, [activeTabId]);
 
   // Plugin loader startup — runs once after mount.
-  // Registers built-in commands that require App-level state, then loads installed plugins.
+  // Registers built-in commands (via appActionsRef) and keybindings, then loads plugins.
   useEffect(() => {
-    // diff.open: SourceControlPanel calls this instead of the old onOpenDiff prop.
+    // --- Diff overlay commands ---
     registerCommand('diff.open', (...args: unknown[]) => {
       const payload = args[0] as { filePath: string; diffText: string; isStaged: boolean };
       setActiveDiff({
@@ -131,11 +134,28 @@ function AppContent() {
         isStaged: payload.isStaged ?? false,
       });
     }, { label: 'Open Diff View', category: 'View' });
+    registerCommand('diff.close', () => { setActiveDiff(null); }, { label: 'Close Diff View', category: 'View' });
 
-    registerCommand('diff.close', () => {
-      setActiveDiff(null);
-    }, { label: 'Close Diff View', category: 'View' });
+    // --- Built-in app commands (delegate to appActionsRef so they always use current state) ---
+    registerCommand('file.save',           () => appActionsRef.current.save(),               { label: 'Save File',        category: 'File' });
+    registerCommand('view.toggleSidebar',  () => appActionsRef.current.toggleSidebar(),      { label: 'Toggle Sidebar',   category: 'View' });
+    registerCommand('file.closeTab',       () => appActionsRef.current.closeTab(),           { label: 'Close Tab',        category: 'File' });
+    registerCommand('tab.next',            () => appActionsRef.current.nextTab(),            { label: 'Next Tab',         category: 'View' });
+    registerCommand('tab.prev',            () => appActionsRef.current.prevTab(),            { label: 'Previous Tab',     category: 'View' });
+    registerCommand('view.search',         () => appActionsRef.current.openSearch(),         { label: 'Search',           category: 'View' });
+    registerCommand('view.commandPalette', () => appActionsRef.current.openCommandPalette(), { label: 'Command Palette',  category: 'View' });
+    registerCommand('view.quickOpen',      () => appActionsRef.current.openQuickOpen(),      { label: 'Quick Open',       category: 'View' });
+    registerCommand('terminal.new',        () => appActionsRef.current.newTerminal(),        { label: 'New Terminal',     category: 'Terminal' });
+    registerCommand('terminal.toggle',     () => appActionsRef.current.toggleTerminal(),     { label: 'Toggle Terminal',  category: 'Terminal' });
+    registerCommand('terminal.send',       () => appActionsRef.current.sendToTerminal(),     { label: 'Send to Terminal', category: 'Terminal' });
+    registerCommand('terminal.claude',     () => appActionsRef.current.sendToClaude(),       { label: 'Send to Claude',   category: 'Terminal' });
+    registerCommand('file.reloadFromDisk', () => appActionsRef.current.reloadFromDisk(),    { label: 'Reload from Disk', category: 'File' });
+    registerCommand('editor.find',         () => appActionsRef.current.find(),               { label: 'Find',             category: 'Editor' });
 
+    // --- Built-in keybindings (registered before plugins so they always win conflicts) ---
+    builtinKeybindings.forEach(registerKeybinding);
+
+    // --- Load installed plugins ---
     const api = createPluginApi({
       register: registerExtension,
       registerPanel,
@@ -150,6 +170,7 @@ function AppContent() {
     });
 
     pluginLoader.loadAll(api, { registerKeybinding }).then((result) => {
+      if (result.firstRun) setShowWizard(true);
       result.errors.forEach((err) => {
         showToast(`Plugin "${err.id}" failed to load: ${err.reason}`, 'warning');
       });
@@ -289,105 +310,72 @@ function AppContent() {
     }
   }, [activeFile, workspacePath, editorInstance, activeTab, saveFile, terminalPanelRef, isClaudeRunning, activeTerminalId, setTerminalClaudeRunning, showToast, focusTerminal, sendToTerminal]);
 
-  // Refs to hold latest callback values — avoids TDZ errors caused by
-  // esbuild reordering const declarations in the production bundle.
-  const sendToTerminalRef = React.useRef<() => Promise<void>>(handleSendToTerminal);
-  sendToTerminalRef.current = handleSendToTerminal;
-  const sendToClaudeRef = React.useRef<() => Promise<void>>(handleSendToClaude);
-  sendToClaudeRef.current = handleSendToClaude;
+  // Single ref holding all app actions that keyboard commands need.
+  // Updated synchronously on every render so command handlers always see the
+  // latest state without stale-closure issues.
+  const appActionsRef = React.useRef<{
+    save: () => void;
+    toggleSidebar: () => void;
+    closeTab: () => void;
+    nextTab: () => void;
+    prevTab: () => void;
+    openSearch: () => void;
+    openCommandPalette: () => void;
+    openQuickOpen: () => void;
+    newTerminal: () => void;
+    toggleTerminal: () => void;
+    sendToTerminal: () => Promise<void>;
+    sendToClaude: () => Promise<void>;
+    reloadFromDisk: () => void;
+    find: () => void;
+  }>(null!);
+  appActionsRef.current = {
+    save: () => {
+      if (activeFile && activeTab) {
+        const ext = getExtensionForTab(activeTab);
+        saveFile((ext !== null || editorRawMode) ? null : editorInstance);
+      }
+    },
+    toggleSidebar: handleToggleSidebar,
+    closeTab: () => { if (activeTabId) closeTab(activeTabId); },
+    nextTab: () => {
+      if (openTabs.length > 1) {
+        const idx = openTabs.findIndex(t => t.id === activeTabId);
+        switchTab(openTabs[(idx + 1) % openTabs.length].id);
+      }
+    },
+    prevTab: () => {
+      if (openTabs.length > 1) {
+        const idx = openTabs.findIndex(t => t.id === activeTabId);
+        switchTab(openTabs[(idx - 1 + openTabs.length) % openTabs.length].id);
+      }
+    },
+    openSearch: () => {
+      setActivePanel('search');
+      if (sidePanelRef.current?.isCollapsed()) sidePanelRef.current?.expand();
+    },
+    openCommandPalette: () => { setQuickOpenInitialValue('> '); setIsQuickOpenVisible(true); },
+    openQuickOpen: () => { setQuickOpenInitialValue(''); setIsQuickOpenVisible(prev => !prev); },
+    newTerminal: () => {
+      createTerminalTab();
+      if (terminalPanelRef.current?.isCollapsed()) terminalPanelRef.current.expand();
+    },
+    toggleTerminal: handleToggleTerminal,
+    sendToTerminal: handleSendToTerminal,
+    sendToClaude: handleSendToClaude,
+    reloadFromDisk: () => { if (activeTabId) reloadTabFromDisk(activeTabId); },
+    find: () => { toggleFindRef.current?.(); },
+  };
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts — all shortcuts are driven by the keybinding registry.
+  // Built-in keybindings are registered in the startup effect above; plugins add
+  // their own after loadAll(). resolveKeybinding() calls e.preventDefault() and
+  // executeCommand() for any match, so no hardcoded checks belong here.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        if (activeFile && activeTab) {
-          const ext = getExtensionForTab(activeTab);
-          const isNonTipTap = ext !== null || editorRawMode;
-          saveFile(isNonTipTap ? null : editorInstance);
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-        e.preventDefault();
-        handleToggleSidebar();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
-        e.preventDefault();
-        if (activeTabId) {
-          closeTab(activeTabId);
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
-        e.preventDefault();
-        if (openTabs.length > 1) {
-          const currentIdx = openTabs.findIndex(t => t.id === activeTabId);
-          let nextIdx: number;
-          if (e.shiftKey) {
-            nextIdx = (currentIdx - 1 + openTabs.length) % openTabs.length;
-          } else {
-            nextIdx = (currentIdx + 1) % openTabs.length;
-          }
-          switchTab(openTabs[nextIdx].id);
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
-        e.preventDefault();
-        setActivePanel('search');
-        if (sidePanelRef.current?.isCollapsed()) {
-          sidePanelRef.current?.expand();
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
-        e.preventDefault();
-        setQuickOpenInitialValue('> ');
-        setIsQuickOpenVisible(true);
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
-        e.preventDefault();
-        setQuickOpenInitialValue('');
-        setIsQuickOpenVisible(prev => !prev);
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === '`') {
-        e.preventDefault();
-        createTerminalTab();
-        if (terminalPanelRef.current?.isCollapsed()) {
-          terminalPanelRef.current.expand();
-        }
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === '`') {
-        e.preventDefault();
-        handleToggleTerminal();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
-        e.preventDefault();
-        if (terminalPanelRef.current?.isCollapsed()) {
-          terminalPanelRef.current.expand();
-        }
-        sendToTerminalRef.current();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'L') {
-        e.preventDefault();
-        sendToClaudeRef.current();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
-        e.preventDefault();
-        if (activeTabId) reloadTabFromDisk(activeTabId);
-      }
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'f') {
-        e.preventDefault();
-        toggleFindRef.current?.();
-        return;
-      }
-      // Plugin keybindings — checked last so built-ins always take precedence.
-      if (resolveKeybinding(e)) {
-        e.preventDefault();
-      }
-    };
+    const handler = (e: KeyboardEvent) => { resolveKeybinding(e); };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [editorInstance, activeFile, saveFile, activeTabId, openTabs, closeTab, switchTab, handleToggleSidebar, handleToggleTerminal, createTerminalTab, sidePanelRef, terminalPanelRef, reloadTabFromDisk]);
+  }, []);
 
   // --- Global Context Menu ---
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -805,6 +793,7 @@ function AppContent() {
 
   return (
     <div className="flex flex-col h-screen w-screen" data-workspace-path={workspacePath ?? ''}>
+      {showWizard && <FirstRunWizard onComplete={() => setShowWizard(false)} />}
       {contextMenu && (
         <ContextMenu
           items={contextMenu.items}

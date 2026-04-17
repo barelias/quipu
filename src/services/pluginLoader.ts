@@ -39,8 +39,13 @@ interface PluginManifest {
   };
 }
 
-interface PluginsConfig {
-  plugins: Array<{ id: string; enabled: boolean }>;
+export interface PluginsConfigEntry {
+  id: string;
+  enabled: boolean;
+}
+
+export interface PluginsConfig {
+  plugins: PluginsConfigEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +55,8 @@ interface PluginsConfig {
 export interface PluginLoadResult {
   loaded: { id: string; name: string }[];
   errors: { id: string; reason: string }[];
+  /** True when plugins.json did not exist — signals App.tsx to show the first-run wizard. */
+  firstRun: boolean;
 }
 
 export type { KeybindingEntry } from '../extensions/keybindingRegistry';
@@ -198,23 +205,23 @@ const electronPluginLoader: PluginLoaderService = {
     let configJson: string | null;
     try {
       configJson = await window.electronAPI!.readPluginsConfig();
-    } catch (err) {
-      return { loaded, errors };
+    } catch {
+      return { loaded, errors, firstRun: false };
     }
 
     if (configJson === null) {
-      // No plugins.json — first-run wizard handles this; nothing to load
-      return { loaded, errors };
+      // No plugins.json — first-run wizard handles this; nothing to load yet.
+      return { loaded, errors, firstRun: true };
     }
 
     let config: PluginsConfig;
     try {
       config = JSON.parse(configJson) as PluginsConfig;
       if (!config || !Array.isArray(config.plugins)) {
-        return { loaded, errors };
+        return { loaded, errors, firstRun: false };
       }
     } catch {
-      return { loaded, errors };
+      return { loaded, errors, firstRun: false };
     }
 
     // 2. Load each enabled plugin
@@ -302,7 +309,7 @@ const electronPluginLoader: PluginLoaderService = {
       }
     }
 
-    return { loaded, errors };
+    return { loaded, errors, firstRun: false };
   },
 };
 
@@ -312,7 +319,7 @@ const electronPluginLoader: PluginLoaderService = {
 
 const browserPluginLoader: PluginLoaderService = {
   loadAll(): Promise<PluginLoadResult> {
-    return Promise.resolve({ loaded: [], errors: [] });
+    return Promise.resolve({ loaded: [], errors: [], firstRun: false });
   },
 };
 
