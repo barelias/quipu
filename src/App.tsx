@@ -4,12 +4,10 @@ import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import type { Editor } from '@tiptap/react';
 import Editor_ from './components/editor/Editor';
 import Terminal from './components/ui/Terminal';
-import FileExplorer from './components/ui/FileExplorer';
 import { Dialog } from 'radix-ui';
 import TabBar from './components/ui/TabBar';
 import ActivityBar from './components/ui/ActivityBar';
-import SearchPanel from './components/ui/SearchPanel';
-import SourceControlPanel from './components/ui/SourceControlPanel';
+import { getRegisteredPanels } from './extensions/panelRegistry';
 import QuickOpen from './components/ui/QuickOpen';
 import TitleBar from './components/ui/TitleBar';
 import ContextMenu from './components/ui/ContextMenu';
@@ -70,8 +68,7 @@ function AppContent() {
     pasteToTerminal, focusTerminal,
   } = useTerminal();
   const { showToast } = useToast();
-  type PanelId = 'explorer' | 'search' | 'git';
-  const [activePanel, setActivePanel] = useState<PanelId | null>('explorer');
+  const [activePanel, setActivePanel] = useState<string | null>('explorer');
   const [isQuickOpenVisible, setIsQuickOpenVisible] = useState<boolean>(false);
   const [quickOpenInitialValue, setQuickOpenInitialValue] = useState<string>('');
   // Input dialog state (replaces window.prompt which doesn't work in Electron)
@@ -126,7 +123,7 @@ function AppContent() {
   const sidePanelRef = usePanelRef();
   const terminalPanelRef = usePanelRef();
 
-  const handlePanelToggle = useCallback((panelId: PanelId) => {
+  const handlePanelToggle = useCallback((panelId: string) => {
     const isCollapsed = sidePanelRef.current?.isCollapsed();
     if (isCollapsed) {
       setActivePanel(panelId);
@@ -826,9 +823,18 @@ function AppContent() {
           defaultSize={250}
         >
           <div className="h-full overflow-hidden flex flex-col bg-bg-surface relative z-10" data-context="explorer">
-            {activePanel === 'explorer' && <FileExplorer />}
-            {activePanel === 'search' && <SearchPanel activePanel={activePanel} />}
-            {activePanel === 'git' && <SourceControlPanel onOpenDiff={handleOpenDiff} />}
+            {(() => {
+              if (!activePanel) return null;
+              const panel = getRegisteredPanels().find((p) => p.id === activePanel);
+              if (!panel) return null;
+              // Extra props for built-in panels that require them; plugin panels receive nothing.
+              const panelPropsMap: Record<string, Record<string, unknown>> = {
+                search: { activePanel },
+                git: { onOpenDiff: handleOpenDiff },
+              };
+              const PanelComp = panel.component as React.ComponentType<Record<string, unknown>>;
+              return <PanelComp {...(panelPropsMap[activePanel] ?? {})} />;
+            })()}
           </div>
         </Panel>
         <Separator className="shrink-0 w-px cursor-col-resize bg-border" style={{ WebkitAppRegion: 'no-drag', boxShadow: 'var(--sidebar-shadow)' } as React.CSSProperties} />
