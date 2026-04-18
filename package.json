@@ -1,7 +1,7 @@
 {
   "name": "quipu_simple",
   "private": true,
-  "version": "0.15.1",
+  "version": "0.15.2",
   "description": "A web-based code editor with rich text, terminal, and git support",
   "author": {
     "name": "barelias",
@@ -126,12 +126,6 @@
     "win": {
       "target": [
         {
-          "target": "msi",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
           "target": "nsis",
           "arch": [
             "x64"
@@ -152,13 +146,6 @@
           "role": "Editor"
         }
       ]
-    },
-    "msi": {
-      "oneClick": false,
-      "perMachine": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Quipu"
     },
     "nsis": {
       "oneClick": false,
