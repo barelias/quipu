@@ -315,7 +315,7 @@ const Editor: React.FC<EditorProps> = ({
         if (!el) return;
         const check = () => {
             const scaledDocWidth = 816 * (zoomLevel / 100);
-            const needed = scaledDocWidth + 300 + 80;
+            const needed = scaledDocWidth + 300; // page + comment track (296px) + tiny buffer
             setCommentsOverflow(el.clientWidth < needed);
         };
         check();
@@ -1143,14 +1143,32 @@ const Editor: React.FC<EditorProps> = ({
         }
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Re-extract comment positions on zoom, resize, scroll, and layout changes
-    // Recalculate comment positions on zoom, resize, scroll, frontmatter toggle
+    // Re-extract after zoom/frontmatter changes. The page div has a 300ms CSS transition
+    // on transform/margin, so we wait for transitionend for accurate coords.
+    // A 350ms fallback covers cases where no transition fires (e.g. same zoom level).
     useEffect(() => {
         if (!editor || editor.isDestroyed) return;
-        const timer = setTimeout(() => {
+        const page = pageRef.current;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+
+        const run = () => {
             if (!editor.isDestroyed) extractComments(editor);
-        }, 100);
-        return () => clearTimeout(timer);
+        };
+
+        const onTransitionEnd = (e: TransitionEvent) => {
+            if (e.propertyName === 'transform' || e.propertyName === 'margin-right') {
+                if (timer) clearTimeout(timer);
+                run();
+            }
+        };
+
+        page?.addEventListener('transitionend', onTransitionEnd);
+        timer = setTimeout(run, 350); // fallback after transition duration
+
+        return () => {
+            page?.removeEventListener('transitionend', onTransitionEnd);
+            if (timer) clearTimeout(timer);
+        };
     }, [zoomLevel, activeTab?.frontmatterCollapsed]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
