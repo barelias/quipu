@@ -16,8 +16,11 @@ export interface FrameAnnotation {
   author: string;
   page?: number;
   selectedText?: string;
-  occurrence?: number;
+  contextBefore?: string;
+  contextAfter?: string;
+  occurrence?: number | null;
   topRatio?: number;
+  detached?: boolean;
   timestamp: string;
 }
 
@@ -33,6 +36,7 @@ export interface Frame {
   type: string;
   id: string;
   filePath: string;
+  format?: 'markdown' | 'quipu' | 'text';
   createdAt: string;
   updatedAt: string;
   annotations: FrameAnnotation[];
@@ -48,7 +52,9 @@ export interface AddAnnotationParams {
   author?: string;
   page?: number;
   selectedText?: string;
-  occurrence?: number;
+  contextBefore?: string;
+  contextAfter?: string;
+  occurrence?: number | null;
   topRatio?: number;
 }
 
@@ -71,6 +77,7 @@ export interface FrameService {
   removeAnnotation: (workspacePath: string, filePath: string, annotationId: string) => Promise<Frame | null>;
   addHistoryEntry: (workspacePath: string, filePath: string, params: AddHistoryParams) => Promise<Frame>;
   updateInstructions: (workspacePath: string, filePath: string, instructions: string) => Promise<Frame>;
+  resolveAnnotations: (workspacePath: string, filePath: string, plainTextCorpus?: string) => Promise<void>;
   watchFrames: (workspacePath: string, onFrameChanged: (fullPath: string) => void) => FrameWatchCleanup;
   isWritingFrame: () => boolean;
 }
@@ -141,7 +148,7 @@ async function createFrame(workspacePath: string, filePath: string): Promise<Fra
   return writeFrame(workspacePath, filePath, frame);
 }
 
-async function addAnnotation(workspacePath: string, filePath: string, { id, line, text, type = 'review', author = 'user', page, selectedText, occurrence, topRatio }: AddAnnotationParams): Promise<Frame> {
+async function addAnnotation(workspacePath: string, filePath: string, { id, line, text, type = 'review', author = 'user', page, selectedText, contextBefore, contextAfter, occurrence, topRatio }: AddAnnotationParams): Promise<Frame> {
   let frame = await readFrame(workspacePath, filePath);
   if (!frame) frame = createEmptyFrame(filePath, workspacePath);
 
@@ -153,6 +160,8 @@ async function addAnnotation(workspacePath: string, filePath: string, { id, line
     author,
     page,
     selectedText,
+    contextBefore,
+    contextAfter,
     occurrence,
     topRatio,
     timestamp: new Date().toISOString(),
@@ -282,6 +291,21 @@ function watchFrames(workspacePath: string, onFrameChanged: (fullPath: string) =
   return cleanup;
 }
 
+async function resolveAnnotations(workspacePath: string, filePath: string, plainTextCorpus?: string): Promise<void> {
+  if (!workspacePath || !filePath) return;
+
+  if (window.electronAPI?.resolveFrameAnnotations) {
+    await window.electronAPI.resolveFrameAnnotations(workspacePath, filePath, plainTextCorpus);
+    return;
+  }
+
+  await fetch(`${SERVER_URL}/frame/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath, filePath, plainText: plainTextCorpus }),
+  });
+}
+
 const frameService: FrameService = {
   getFramePath,
   readFrame,
@@ -291,6 +315,7 @@ const frameService: FrameService = {
   removeAnnotation,
   addHistoryEntry,
   updateInstructions,
+  resolveAnnotations,
   watchFrames,
   isWritingFrame: () => isWritingFrame,
 };

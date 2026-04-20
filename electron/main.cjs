@@ -7,6 +7,40 @@ const { execFile } = require('child_process');
 const pty = require('node-pty');
 const AdmZip = require('adm-zip');
 
+// FRAME anchor resolution helpers (mirror of Go server logic)
+function stripMarkdownElectron(content) {
+    // Strip YAML frontmatter
+    if (content.startsWith('---\n')) {
+        const end = content.indexOf('\n---', 4);
+        if (end >= 0) {
+            content = content.slice(end + 4);
+            if (content.startsWith('\n')) content = content.slice(1);
+        }
+    }
+    // Strip inline markdown markers
+    return content
+        .split('\n')
+        .map(line => {
+            const trimmed = line.replace(/^#+\s*/, '');
+            return trimmed
+                .replace(/\*\*/g, '').replace(/__/g, '')
+                .replace(/\*/g, '').replace(/_/g, '').replace(/`/g, '');
+        })
+        .join('\n');
+}
+
+function overlapRatioElectron(a, b) {
+    if (!a && !b) return 1.0;
+    if (!a || !b) return 0.0;
+    const freq = {};
+    for (const c of a) freq[c] = (freq[c] || 0) + 1;
+    let common = 0;
+    for (const c of b) {
+        if (freq[c] > 0) { common++; freq[c]--; }
+    }
+    return (2 * common) / ([...a].length + [...b].length);
+}
+
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 try {
     if (require('electron-squirrel-startup')) {
@@ -792,6 +826,128 @@ app.whenReady().then(() => {
             console.warn('FRAME directory watch failed:', err.message);
         }
         return { success: true };
+    });
+
+    // FRAME anchor resolution — mirrors the Go /frame/resolve algorithm
+    ipcMain.handle('frame-resolve', async (event, workspacePath, filePath, plainText) => {
+        if (!workspacePath || !filePath) return { resolved: 0 };
+
+        // Path validation: filePath must be within workspacePath
+        const rel = path.relative(workspacePath, filePath);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) {
+            return { resolved: 0, error: 'path outside workspace' };
+        }
+
+        const framePath = path.join(workspacePath, '.quipu', 'meta', rel + '.frame.json');
+
+        let frameData;
+        try {
+            frameData = await fs.promises.readFile(framePath, 'utf8');
+        } catch (err) {
+            if (err.code === 'ENOENT') return { resolved: 0 };
+            return { resolved: 0 };
+        }
+
+        let frame;
+        try {
+            frame = JSON.parse(frameData);
+        } catch {
+            return { resolved: 0 };
+        }
+
+        // Determine format
+        let format = frame.format || '';
+        if (!format) {
+            const ext = path.extname(filePath).toLowerCase();
+            if (ext === '.md' || ext === '.markdown') format = 'markdown';
+            else if (ext === '.quipu') format = 'quipu';
+            else format = 'text';
+            frame.format = format;
+        }
+
+        // Build corpus — prefer client-provided plain text (same block-based newline
+        // counting as posToLineNumber/lineNumberToPos on the client).
+        let corpus = '';
+        try {
+            if (plainText) {
+                corpus = plainText;
+            } else if (format === 'quipu') {
+                return { resolved: 0 };
+            } else {
+                const raw = await fs.promises.readFile(filePath, 'utf8');
+                corpus = format === 'markdown' ? stripMarkdownElectron(raw) : raw;
+            }
+        } catch {
+            return { resolved: 0 };
+        }
+
+        const annotations = frame.annotations || [];
+        let resolved = 0;
+
+        for (let i = 0; i < annotations.length; i++) {
+            const a = annotations[i];
+            if (!a || !a.selectedText) continue;
+
+            // Find all occurrence offsets
+            const offsets = [];
+            let pos = 0;
+            while (true) {
+                const idx = corpus.indexOf(a.selectedText, pos);
+                if (idx < 0) break;
+                offsets.push(idx);
+                pos = idx + 1;
+            }
+
+            if (offsets.length === 0) {
+                a.detached = true;
+                delete a.line;
+                continue;
+            }
+
+            // Score each occurrence
+            const contextBefore = a.contextBefore || '';
+            const contextAfter = a.contextAfter || '';
+            let bestScore = -1;
+            let bestCandidates = [];
+
+            for (let k = 0; k < offsets.length; k++) {
+                const offset = offsets[k];
+                const wb = corpus.substring(Math.max(0, offset - 80), offset);
+                const wa = corpus.substring(offset + a.selectedText.length, offset + a.selectedText.length + 80);
+                const score = overlapRatioElectron(contextBefore, wb) + overlapRatioElectron(contextAfter, wa);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestCandidates = [k];
+                } else if (score === bestScore) {
+                    bestCandidates.push(k);
+                }
+            }
+
+            let chosen = bestCandidates[0];
+            if (typeof a.occurrence === 'number' && a.occurrence > 0) {
+                const occIdx = a.occurrence - 1;
+                if (occIdx < bestCandidates.length) chosen = bestCandidates[occIdx];
+            }
+
+            const matchOffset = offsets[chosen];
+            const lineNum = corpus.substring(0, matchOffset).split('\n').length;
+
+            a.line = lineNum;
+            a.detached = false;
+            resolved++;
+        }
+
+        frame.annotations = annotations;
+        frame.updatedAt = new Date().toISOString();
+
+        try {
+            await fs.promises.mkdir(path.dirname(framePath), { recursive: true });
+            await fs.promises.writeFile(framePath, JSON.stringify(frame, null, 2), 'utf8');
+        } catch {
+            return { resolved: 0 };
+        }
+
+        return { resolved };
     });
 
     // Setup Terminal IPC (multi-terminal with terminalId multiplexing)

@@ -506,6 +506,8 @@ export function TabProvider({ children }: TabProviderProps) {
     }
   }, [activeTabId, setTabDirty]);
 
+  const resolveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const saveFile = useCallback(async (editorInstance: Editor | null) => {
     if (!activeTab) return;
 
@@ -534,8 +536,9 @@ export function TabProvider({ children }: TabProviderProps) {
 
     if (!editorInstance) return;
 
+    const isQuipuFile = activeTab.isQuipu || activeTab.name.endsWith('.quipu');
     let content: string;
-    if (activeTab.isQuipu || activeTab.name.endsWith('.quipu')) {
+    if (isQuipuFile) {
       content = JSON.stringify({
         type: 'quipu',
         version: 1,
@@ -565,12 +568,26 @@ export function TabProvider({ children }: TabProviderProps) {
         t.id === activeTab.id ? { ...t, isDirty: false, diskContent: content, hasConflict: false, conflictDiskContent: null } : t
       ));
       showToast('File saved', 'success');
+
+      // Trigger server-side FRAME anchor re-resolution (debounced, fire-and-forget)
+      if (workspacePath) {
+        // Always pass the editor's plain-text corpus so the server uses the same
+        // block-based newline counting as posToLineNumber/lineNumberToPos on the client.
+        const doc = editorInstance.state.doc;
+        const plainTextCorpus = doc.textBetween(0, doc.content.size, '\n');
+        const filePath = activeTab.path;
+        if (resolveDebounceRef.current) clearTimeout(resolveDebounceRef.current);
+        resolveDebounceRef.current = setTimeout(() => {
+          frameService.resolveAnnotations(workspacePath, filePath, plainTextCorpus)
+            .catch(err => console.warn('[frame] resolve failed', err));
+        }, 200);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('Failed to save file:', err);
       showToast('Failed to save file: ' + message, 'error');
     }
-  }, [activeTab, showToast]);
+  }, [activeTab, showToast, workspacePath]);
 
   // Wrap deleteEntry to also close the tab if the deleted file was open
   const deleteEntry = useCallback(async (targetPath: string) => {
@@ -748,7 +765,7 @@ export function TabProvider({ children }: TabProviderProps) {
 
     if (cleanup.registerPath) {
       for (const tab of openTabsRef.current) {
-        if (!tab.isMedia && !tab.isQuipu) {
+        if (!tab.isMedia) {
           cleanup.registerPath(frameService.getFramePath(workspacePath, tab.path));
         }
       }
@@ -762,7 +779,7 @@ export function TabProvider({ children }: TabProviderProps) {
     if (!cleanup?.registerPath || !workspacePath) return;
 
     for (const tab of openTabs) {
-      if (!tab.isMedia && !tab.isQuipu) {
+      if (!tab.isMedia) {
         cleanup.registerPath(frameService.getFramePath(workspacePath, tab.path));
       }
     }

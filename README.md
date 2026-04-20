@@ -84,3 +84,21 @@ src/
   context/         React Context for workspace state
   services/        File system abstraction (Electron / browser)
 ```
+
+## File Formats
+
+### `.frame.json`
+
+Per-file annotation sidecar. Stored at `{workspace}/.quipu/meta/{relativePath}.frame.json`.
+
+Top-level fields: `version`, `type`, `id`, `filePath`, `format` (`"markdown" | "quipu" | "text"`), `createdAt`, `updatedAt`, `annotations`, `instructions`, `history`.
+
+Each annotation: `id` (UUID, stable identity), `text` (comment body), `type`, `author`, `selectedText` (plain-text anchor), `contextBefore` / `contextAfter` (up to 80 chars each, for disambiguation), `occurrence` (1-based tiebreaker when `selectedText` appears multiple times), `line` (server-maintained content-relative line number, 1 = first line after frontmatter), `detached` (true when the server cannot re-resolve the anchor).
+
+The `format` field governs how the Go server builds its search corpus: `"markdown"` strips YAML frontmatter and inline formatting; `"quipu"` uses a client-provided plain-text rendering; `"text"` searches the file as-is.
+
+### `.quipudb.jsonl`
+
+In-workspace structured database. Any file named `*.quipudb.jsonl` in the workspace is treated as a database.
+
+Format: newline-delimited JSON (JSONL). The first line is a schema descriptor (`_schema: true`) with fields `version`, `name`, `columns` (array of `{key, label, type}`), and `views`. Subsequent lines are data rows, each with a unique `_id` field plus column values. New rows are appended; updates rewrite the matching line in place.

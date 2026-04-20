@@ -1407,6 +1407,277 @@ func handleFileStat(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
+// FRAME anchor resolution
+// ============================================================================
+
+// stripMarkdownToCorpus removes YAML frontmatter and basic inline markdown
+// to produce a plain-text corpus matching TipTap's textBetween output.
+func stripMarkdownToCorpus(content string) string {
+	// Strip YAML frontmatter (--- ... ---)
+	if strings.HasPrefix(content, "---\n") {
+		if idx := strings.Index(content[4:], "\n---"); idx >= 0 {
+			content = content[4+idx+4:]
+			content = strings.TrimPrefix(content, "\n")
+		}
+	}
+	replacer := strings.NewReplacer("**", "", "__", "", "*", "", "_", "", "`", "")
+	var out strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		// Strip leading heading markers (# Heading → Heading)
+		trimmed := strings.TrimLeft(line, "#")
+		if len(trimmed) < len(line) {
+			line = strings.TrimPrefix(trimmed, " ")
+		}
+		out.WriteString(replacer.Replace(line))
+		out.WriteByte('\n')
+	}
+	result := out.String()
+	return strings.TrimSuffix(result, "\n")
+}
+
+// contextWindow returns up to n chars from corpus starting at offset.
+// Negative n means go backwards from offset.
+func contextWindow(corpus string, offset, n int) string {
+	if n > 0 {
+		end := offset + n
+		if end > len(corpus) {
+			end = len(corpus)
+		}
+		return corpus[offset:end]
+	}
+	start := offset + n
+	if start < 0 {
+		start = 0
+	}
+	return corpus[start:offset]
+}
+
+// overlapRatio computes 2 * |common_chars| / (|a| + |b|) using character frequencies.
+func overlapRatio(a, b string) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 1.0
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return 0.0
+	}
+	freq := make(map[rune]int)
+	for _, c := range a {
+		freq[c]++
+	}
+	common := 0
+	for _, c := range b {
+		if freq[c] > 0 {
+			common++
+			freq[c]--
+		}
+	}
+	ra, rb := []rune(a), []rune(b)
+	return float64(2*common) / float64(len(ra)+len(rb))
+}
+
+func handleFrameResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	var req struct {
+		WorkspacePath string `json:"workspacePath"`
+		FilePath      string `json:"filePath"`
+		PlainText     string `json:"plainText"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.WorkspacePath == "" || req.FilePath == "" {
+		jsonError(w, "workspacePath and filePath required", http.StatusBadRequest)
+		return
+	}
+
+	// Request-scoped sandbox check (independent of workspaceExplicit global)
+	wsAbs, err := filepath.Abs(req.WorkspacePath)
+	if err != nil {
+		jsonError(w, "invalid workspacePath", http.StatusBadRequest)
+		return
+	}
+	fileAbs, err := filepath.Abs(req.FilePath)
+	if err != nil {
+		jsonError(w, "invalid filePath", http.StatusBadRequest)
+		return
+	}
+	rel, err := filepath.Rel(wsAbs, fileAbs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		jsonError(w, "filePath outside workspace", http.StatusForbidden)
+		return
+	}
+
+	framePath := filepath.Join(wsAbs, ".quipu", "meta", rel+".frame.json")
+
+	frameData, err := os.ReadFile(framePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			jsonResponse(w, map[string]int{"resolved": 0})
+			return
+		}
+		jsonError(w, "failed to read frame file", http.StatusInternalServerError)
+		return
+	}
+
+	var frame map[string]interface{}
+	if err := json.Unmarshal(frameData, &frame); err != nil {
+		jsonError(w, "failed to parse frame file", http.StatusInternalServerError)
+		return
+	}
+
+	// Determine format
+	format, _ := frame["format"].(string)
+	if format == "" {
+		ext := strings.ToLower(filepath.Ext(req.FilePath))
+		switch ext {
+		case ".md", ".markdown":
+			format = "markdown"
+		case ".quipu":
+			format = "quipu"
+		default:
+			format = "text"
+		}
+		frame["format"] = format
+	}
+
+	// Build search corpus
+	// Prefer the client-provided plain-text corpus (same block-based newline counting
+	// as posToLineNumber/lineNumberToPos on the client) over server-side extraction.
+	var corpus string
+	if req.PlainText != "" {
+		corpus = req.PlainText
+	} else {
+		switch format {
+		case "quipu":
+			// No client corpus and can't extract from JSON — skip resolution.
+			jsonResponse(w, map[string]int{"resolved": 0})
+			return
+		case "markdown":
+			raw, err := os.ReadFile(fileAbs)
+			if err != nil {
+				jsonResponse(w, map[string]int{"resolved": 0})
+				return
+			}
+			corpus = stripMarkdownToCorpus(string(raw))
+		default:
+			raw, err := os.ReadFile(fileAbs)
+			if err != nil {
+				jsonResponse(w, map[string]int{"resolved": 0})
+				return
+			}
+			corpus = string(raw)
+		}
+	}
+
+	annotations, _ := frame["annotations"].([]interface{})
+	resolved := 0
+
+	for i, ann := range annotations {
+		a, ok := ann.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		selectedText, _ := a["selectedText"].(string)
+		if selectedText == "" {
+			continue // legacy annotation — preserve line, leave detached unchanged
+		}
+
+		// Find all occurrence offsets
+		var offsets []int
+		pos := 0
+		for {
+			idx := strings.Index(corpus[pos:], selectedText)
+			if idx < 0 {
+				break
+			}
+			offsets = append(offsets, pos+idx)
+			pos += idx + 1
+		}
+
+		if len(offsets) == 0 {
+			a["detached"] = true
+			delete(a, "line")
+			annotations[i] = a
+			continue
+		}
+
+		contextBefore, _ := a["contextBefore"].(string)
+		contextAfter, _ := a["contextAfter"].(string)
+
+		// Score each occurrence
+		type scored struct {
+			idx   int
+			score float64
+		}
+		scores := make([]scored, len(offsets))
+		bestScore := -1.0
+		for k, offset := range offsets {
+			wb := contextWindow(corpus, offset, -80)
+			wa := contextWindow(corpus, offset+len(selectedText), 80)
+			s := overlapRatio(contextBefore, wb) + overlapRatio(contextAfter, wa)
+			scores[k] = scored{k, s}
+			if s > bestScore {
+				bestScore = s
+			}
+		}
+
+		// Collect candidates with best score
+		var bestCandidates []int
+		for _, s := range scores {
+			if s.score == bestScore {
+				bestCandidates = append(bestCandidates, s.idx)
+			}
+		}
+
+		chosen := bestCandidates[0]
+		// Tiebreaker: use occurrence field (1-based index into tied candidates)
+		if occ, ok := a["occurrence"].(float64); ok && occ > 0 {
+			occIdx := int(occ) - 1
+			if occIdx < len(bestCandidates) {
+				chosen = bestCandidates[occIdx]
+			}
+		}
+
+		matchOffset := offsets[chosen]
+		lineNum := strings.Count(corpus[:matchOffset], "\n") + 1
+
+		a["line"] = lineNum
+		a["detached"] = false
+		annotations[i] = a
+		resolved++
+	}
+
+	frame["annotations"] = annotations
+	frame["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+
+	updated, err := json.MarshalIndent(frame, "", "  ")
+	if err != nil {
+		jsonError(w, "failed to serialize frame", http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(framePath), 0755); err != nil {
+		jsonError(w, "failed to create frame directory", http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.WriteFile(framePath, updated, 0644); err != nil {
+		jsonError(w, "failed to write frame file", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]int{"resolved": resolved})
+}
+
+// ============================================================================
 // Jupyter Server management
 // ============================================================================
 
@@ -1805,6 +2076,9 @@ func main() {
 
 	// File stat endpoint (for browser polling — returns mtime)
 	http.HandleFunc("/file/stat", corsMiddleware(handleFileStat))
+
+	// FRAME anchor resolution endpoint
+	http.HandleFunc("/frame/resolve", corsMiddleware(handleFrameResolve))
 
 	// Terminal endpoint — corsMiddleware for preflight, upgrader for WS origin
 	http.HandleFunc("/term", corsMiddleware(handleTerminal))

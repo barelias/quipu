@@ -6,12 +6,12 @@ import {
     TextHOneIcon, TextHTwoIcon, TextHThreeIcon,
     ListBulletsIcon, ListNumbersIcon, QuotesIcon, CodeIcon, CodeBlockIcon,
     TableIcon, MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon, ChatCircleDotsIcon,
+    WarningIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor as TiptapEditor, JSONContent } from '@tiptap/react';
 import type { EditorView } from '@tiptap/pm/view';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -35,6 +35,7 @@ import type { SlashCommandMenuRef } from './SlashCommandMenu';
 import CommentPanel from './CommentPanel';
 import FrontmatterProperties from './FrontmatterProperties';
 import frameService from '../../services/frameService';
+import type { FrameAnnotation } from '../../services/frameService';
 import fs from '../../services/fileSystem';
 import type { Tab } from '../../types/tab';
 
@@ -99,30 +100,52 @@ interface EditorProps {
     updateFrontmatterTag: (tabId: string, key: string, index: number, value: string) => void;
 }
 
-// Map an editor position to a 1-based line number (top-level block index)
-const posToLineNumber = (doc: ProseMirrorNode, pos: number): number => {
-    let line = 0;
-    let offset = 0;
-    for (let i = 0; i < doc.childCount; i++) {
-        line++;
-        offset += doc.child(i).nodeSize;
-        if (offset >= pos) break;
-    }
-    return Math.max(1, line);
+// Map an editor position to a 1-based content-relative line number.
+// Uses '\n' as block separator so each ProseMirror block boundary = one newline,
+// matching the server's newline-based counting of the plain-text corpus.
+// Frontmatter is stored in tab state (not in the doc), so no stripping needed.
+const posToLineNumber = (editor: TiptapEditor, pos: number): number => {
+    const text = editor.state.doc.textBetween(0, pos, '\n');
+    return text.split('\n').length; // split on '\n' gives 1-based count
 };
 
-// Map a 1-based line number to the start position inside that block
-const lineNumberToPos = (doc: ProseMirrorNode, lineNumber: number): number => {
-    let line = 0;
-    let pos = 0;
-    for (let i = 0; i < doc.childCount; i++) {
-        line++;
-        if (line === lineNumber) {
-            return pos + 1; // +1 to enter the node content
-        }
-        pos += doc.child(i).nodeSize;
+// Map a 1-based content-relative line number to a ProseMirror position.
+// Walks the plain text (same '\n' block separator) to find the character offset
+// of line N, then binary-searches for the corresponding ProseMirror position.
+const lineNumberToPos = (editor: TiptapEditor, lineNumber: number): number => {
+    const doc = editor.state.doc;
+    const fullText = doc.textBetween(0, doc.content.size, '\n');
+    const lines = fullText.split('\n');
+
+    if (lineNumber < 1) return 1;
+    if (lineNumber > lines.length) return doc.content.size;
+
+    // Compute character offset of the first char of line N
+    let charOffset = 0;
+    for (let i = 1; i < lineNumber; i++) {
+        charOffset += lines[i - 1].length + 1; // +1 for the '\n' separator
     }
-    return doc.content.size;
+
+    if (charOffset === 0) return 1; // line 1 → start of first block content
+
+    // Binary search: smallest ProseMirror pos p where textBetween(0,p,'\n').length >= charOffset
+    let lo = 0;
+    let hi = doc.content.size;
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (doc.textBetween(0, mid, '\n').length < charOffset) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    // Advance past block boundaries (depth=0 means at doc level, between blocks)
+    while (lo < doc.content.size && doc.resolve(lo).depth === 0) {
+        lo++;
+    }
+
+    return lo;
 };
 
 const ToolbarButton: React.FC<ToolbarButtonProps> = ({ onClick, isActive, title, disabled, children }) => (
@@ -163,6 +186,8 @@ const Editor: React.FC<EditorProps> = ({
     const [showMenu, setShowMenu] = useState<boolean>(false);
     const [comments, setComments] = useState<CommentData[]>([]);
     const [showCommentInput, setShowCommentInput] = useState<boolean>(false);
+    const [detachedAnnotations, setDetachedAnnotations] = useState<FrameAnnotation[]>([]);
+    const [commentPortalTarget, setCommentPortalTarget] = useState<HTMLElement | null>(null);
 
     const savedSelectionRef = useRef<SavedSelection | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
@@ -866,9 +891,6 @@ const Editor: React.FC<EditorProps> = ({
     useEffect(() => {
         if (!editor || !activeFile?.path || !workspacePath || !activeTabId) return;
 
-        // Skip quipu files — they store comments inline in TipTap JSON
-        if (activeFile.isQuipu) return;
-
         let cancelled = false;
         const isExternalReload = frameReloadKey > 0;
 
@@ -886,6 +908,19 @@ const Editor: React.FC<EditorProps> = ({
                 const { tr } = editor.state;
                 let applied = false;
 
+                // Map a corpus character offset (textBetween with '\n') to a ProseMirror position.
+                const corpusOffsetToPos = (charOffset: number): number => {
+                    if (charOffset === 0) return 1;
+                    let lo = 0, hi = doc.content.size;
+                    while (lo < hi) {
+                        const mid = Math.floor((lo + hi) / 2);
+                        if (doc.textBetween(0, mid, '\n').length < charOffset) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    while (lo < doc.content.size && doc.resolve(lo).depth === 0) lo++;
+                    return lo;
+                };
+
                 // On external FRAME reload, clear all existing comment marks first
                 // so we get a fresh set from the updated FRAME file
                 if (isExternalReload) {
@@ -901,13 +936,19 @@ const Editor: React.FC<EditorProps> = ({
                 }
 
                 if (!frame?.annotations?.length) {
-                    // If there were marks to clear but no new annotations, dispatch the removal
                     if (applied && !cancelled) {
+                        isLoadingContentRef.current = true;
                         editor.view.dispatch(tr);
+                        isLoadingContentRef.current = false;
                         extractComments(editor);
                     }
+                    if (!cancelled) setDetachedAnnotations([]);
                     return;
                 }
+
+                // Split annotations into attached and detached
+                const freshDetached: FrameAnnotation[] = [];
+                const corpus = doc.textBetween(0, doc.content.size, '\n');
 
                 // Collect existing comment IDs to avoid duplicates (only for initial load, not external reload)
                 const existingIds = new Set();
@@ -921,29 +962,63 @@ const Editor: React.FC<EditorProps> = ({
                 }
 
                 for (const annotation of frame.annotations) {
+                    if (annotation.detached) {
+                        freshDetached.push(annotation);
+                        continue;
+                    }
                     if (!isExternalReload && existingIds.has(annotation.id)) continue;
                     if (annotation.line == null) continue;
 
-                    const pos = lineNumberToPos(doc, annotation.line);
+                    const pos = lineNumberToPos(editor, annotation.line);
                     if (pos <= 0 || pos >= doc.content.size) continue;
 
-                    const $pos = doc.resolve(pos);
-                    const blockNode = $pos.parent;
-                    const blockStart = $pos.start();
-                    const blockEnd = blockStart + blockNode.content.size;
+                    const commentMark = editor.schema.marks.comment.create({
+                        comment: annotation.text,
+                        id: annotation.id,
+                    });
 
-                    if (blockEnd > blockStart) {
-                        const commentMark = editor.schema.marks.comment.create({
-                            comment: annotation.text,
-                            id: annotation.id,
-                        });
-                        tr.addMark(blockStart, blockEnd, commentMark);
-                        applied = true;
+                    // Prefer exact selectedText range; fall back to whole block
+                    let markApplied = false;
+                    if (annotation.selectedText) {
+                        const st = annotation.selectedText;
+                        const targetOcc = annotation.occurrence ?? 1;
+                        let occ = 0;
+                        let searchFrom = 0;
+                        while (searchFrom <= corpus.length) {
+                            const idx = corpus.indexOf(st, searchFrom);
+                            if (idx < 0) break;
+                            occ++;
+                            if (occ === targetOcc) {
+                                const markFrom = corpusOffsetToPos(idx);
+                                const markTo = corpusOffsetToPos(idx + st.length);
+                                if (markFrom < markTo && markTo <= doc.content.size) {
+                                    tr.addMark(markFrom, markTo, commentMark);
+                                    applied = true;
+                                    markApplied = true;
+                                }
+                                break;
+                            }
+                            searchFrom = idx + 1;
+                        }
+                    }
+
+                    if (!markApplied) {
+                        const $pos = doc.resolve(pos);
+                        const blockStart = $pos.start();
+                        const blockEnd = blockStart + $pos.parent.content.size;
+                        if (blockEnd > blockStart) {
+                            tr.addMark(blockStart, blockEnd, commentMark);
+                            applied = true;
+                        }
                     }
                 }
 
+                if (!cancelled) setDetachedAnnotations(freshDetached);
+
                 if (applied && !cancelled) {
+                    isLoadingContentRef.current = true;
                     editor.view.dispatch(tr);
+                    isLoadingContentRef.current = false;
                     extractComments(editor);
                 }
             } catch (err) {
@@ -962,17 +1037,16 @@ const Editor: React.FC<EditorProps> = ({
 
 
     // Recalculate adjusted positions to prevent overlap.
-    // Uses viewport coordinates (matching position:fixed). Cards above the wrapper
-    // top edge are left as-is and filtered out during render.
+    // Uses wrapper-local coordinates (matching position:absolute within commentWrapperRef).
+    // overflow:hidden on the wrapper clips cards that extend above/below the editor area.
     useEffect(() => {
         const newPositions: Record<number, number> = {};
-        const wrapperTop = commentWrapperRef.current?.getBoundingClientRect().top ?? 0;
-        let lastBottom = wrapperTop;
+        let lastBottom = 0;
         const GAP = 16;
         const sortedComments = [...comments].sort((a, b) => a.top - b.top);
         sortedComments.forEach((comment, index) => {
             let top = comment.top;
-            if (top >= wrapperTop) {
+            if (top >= 0) {
                 if (top < lastBottom + GAP) top = lastBottom + GAP;
                 const el = commentsRef.current[index];
                 const height = el ? el.getBoundingClientRect().height : 80;
@@ -986,17 +1060,19 @@ const Editor: React.FC<EditorProps> = ({
     const extractComments = (editor: TiptapEditor): void => {
         const commentsData: CommentData[] = [];
 
-        // Track left = right edge of page + gap, in viewport X (for position:fixed).
         const pageRect = pageRef.current?.getBoundingClientRect();
-        if (pageRect) setCommentTrackLeft(pageRect.right + 16);
+        const wrapperRect = commentWrapperRef.current?.getBoundingClientRect();
+        if (pageRect && wrapperRect) {
+            setCommentTrackLeft(pageRect.right - wrapperRect.left + 16);
+        }
 
         editor.state.doc.descendants((node, pos) => {
             if (node.marks) {
                 const commentMark = node.marks.find(m => m.type.name === 'comment');
                 if (commentMark) {
                     const coords = editor.view.coordsAtPos(pos);
-                    // viewport Y — used directly with position:fixed
-                    const relativeTop = coords.top;
+                    // local Y relative to commentWrapperRef (for position:absolute within wrapper)
+                    const relativeTop = coords.top - (wrapperRect?.top ?? 0);
 
                     commentsData.push({
                         text: node.text ?? '',
@@ -1044,7 +1120,8 @@ const Editor: React.FC<EditorProps> = ({
         savedSelectionRef.current = { from, to };
 
         const coords = editor.view.coordsAtPos(from);
-        setCommentInputTop(coords.top);
+        const wrapperTop = commentWrapperRef.current?.getBoundingClientRect().top ?? 0;
+        setCommentInputTop(coords.top - wrapperTop);
         setShowCommentInput(true);
         setShowMenu(false);
 
@@ -1089,7 +1166,35 @@ const Editor: React.FC<EditorProps> = ({
             const sel = savedSelectionRef.current;
             const from = sel ? sel.from : editor.state.selection.from;
             const to = sel ? sel.to : editor.state.selection.to;
-            const lineNumber = posToLineNumber(editor.state.doc, from);
+            const lineNumber = posToLineNumber(editor, from);
+
+            // Capture anchor data for stable re-resolution
+            const selectedText = editor.state.doc.textBetween(from, to);
+            const contextBefore = editor.state.doc.textBetween(Math.max(0, from - 80), from, '\n');
+            const contextAfter = editor.state.doc.textBetween(to, Math.min(editor.state.doc.content.size, to + 80), '\n');
+
+            // Count occurrences of selectedText up to and including 'from'
+            const fullText = editor.state.doc.textContent;
+            let occurrence: number | null = null;
+            if (selectedText) {
+                let count = 0;
+                let searchPos = 0;
+                const totalOccurrences: number[] = [];
+                while ((searchPos = fullText.indexOf(selectedText, searchPos)) !== -1) {
+                    totalOccurrences.push(searchPos);
+                    searchPos += selectedText.length;
+                }
+                // Find which occurrence 'from' maps to (by plain-text offset)
+                const plainTextBefore = editor.state.doc.textBetween(0, from, '\n');
+                for (let i = 0; i < totalOccurrences.length; i++) {
+                    if (totalOccurrences[i] >= plainTextBefore.length) {
+                        count = i + 1;
+                        break;
+                    }
+                }
+                if (count === 0) count = totalOccurrences.length;
+                occurrence = totalOccurrences.length > 1 ? count : null;
+            }
 
             // Apply comment mark directly via ProseMirror transaction to avoid
             // focus() restoring a stale/collapsed selection
@@ -1113,6 +1218,10 @@ const Editor: React.FC<EditorProps> = ({
                     text: commentText,
                     type: commentType,
                     author: 'user',
+                    selectedText,
+                    contextBefore,
+                    contextAfter,
+                    occurrence,
                 }).catch((err) => {
                     console.warn('Failed to sync comment to FRAME:', err);
                 });
@@ -1141,6 +1250,7 @@ const Editor: React.FC<EditorProps> = ({
                 pageEl.getBoundingClientRect().right - wrapperEl.getBoundingClientRect().left + 16
             );
         }
+        if (wrapperEl) setCommentPortalTarget(wrapperEl);
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Re-extract after zoom/frontmatter changes. The page div has a 300ms CSS transition
@@ -1660,14 +1770,14 @@ const Editor: React.FC<EditorProps> = ({
                 )}
             </div>
 
-            {/* Floating comment track — fixed-position portal so it never affects layout.
-                Cards with viewport Y below the wrapper top edge are hidden via JS check. */}
-            {!commentsOverflow && commentsVisible && commentTrackLeft > 0 && createPortal(
+            {/* Floating comment track — absolute-positioned portal into commentWrapperRef.
+                overflow:hidden on the wrapper clips cards to the editor area bounds. */}
+            {!commentsOverflow && commentsVisible && commentTrackLeft > 0 && commentPortalTarget && createPortal(
                 <>
                     {showCommentInput && (
                         <div
                             className="bg-bg-surface rounded-lg shadow-lg p-2.5 border border-accent"
-                            style={{ position: 'fixed', top: commentInputTop, left: commentTrackLeft, width: 240, zIndex: 200 }}
+                            style={{ position: 'absolute', top: commentInputTop, left: commentTrackLeft, width: 240, zIndex: 200 }}
                         >
                             <textarea
                                 value={commentText}
@@ -1703,15 +1813,18 @@ const Editor: React.FC<EditorProps> = ({
                     )}
                     {comments.map((c, i) => {
                         const top = adjustedPositions[i] !== undefined ? adjustedPositions[i] : c.top;
-                        const wrapperTop = commentWrapperRef.current?.getBoundingClientRect().top ?? 0;
-                        if (top < wrapperTop) return null;
+                        const cardEl = commentsRef.current[i];
+                        const cardHeight = cardEl ? cardEl.getBoundingClientRect().height : 80;
+                        // Hide only when completely scrolled above the wrapper top (local coord 0).
+                        // Cards extending below are clipped by overflow:hidden on the wrapper.
+                        if (top + cardHeight < 0) return null;
                         return (
                             <div
                                 key={c.id || i}
                                 ref={(el: HTMLDivElement | null) => { commentsRef.current[i] = el; }}
                                 className="bg-bg-surface rounded-lg shadow-md p-3 border border-transparent hover:shadow-lg"
                                 style={{
-                                    position: 'fixed',
+                                    position: 'absolute',
                                     top,
                                     left: commentTrackLeft,
                                     width: 280,
@@ -1764,7 +1877,7 @@ const Editor: React.FC<EditorProps> = ({
                         );
                     })}
                 </>,
-                document.body
+                commentPortalTarget
             )}
 
             {/* Comment Panel — collapsible side panel (narrow viewport / overflow mode) */}
@@ -1849,6 +1962,46 @@ const Editor: React.FC<EditorProps> = ({
                             <div className="text-xs text-text-tertiary border-l-2 border-warning/50 pl-2 italic truncate">
                                 &ldquo;{c.text}&rdquo;
                             </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Detached annotations warning panel */}
+            {detachedAnnotations.length > 0 && (
+                <div className="shrink-0 w-[320px] border-l border-warning/40 bg-bg-surface overflow-y-auto">
+                    <div className="px-4 py-3 border-b border-warning/30 sticky top-0 bg-bg-surface z-10 flex items-center gap-2">
+                        <WarningIcon size={14} className="text-warning shrink-0" />
+                        <span className="text-sm font-medium text-text-primary">
+                            Detached ({detachedAnnotations.length})
+                        </span>
+                    </div>
+                    {detachedAnnotations.map((ann) => (
+                        <div key={ann.id} className="px-4 py-3 border-b border-border/20">
+                            <div className="flex items-start justify-between gap-2 mb-1.5">
+                                <div className="flex items-center gap-1 text-[10px] text-warning font-medium">
+                                    <WarningIcon size={10} />
+                                    detached
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        if (workspacePath && activeFile?.path) {
+                                            frameService.removeAnnotation(workspacePath, activeFile.path, ann.id)
+                                                .catch(err => console.warn('[frame] remove failed', err));
+                                        }
+                                    }}
+                                    className="text-text-tertiary hover:text-text-secondary p-0.5 rounded hover:bg-bg-elevated shrink-0"
+                                    title="Remove annotation"
+                                >
+                                    <XIcon size={12} />
+                                </button>
+                            </div>
+                            <div className="text-sm text-page-text mb-1.5 whitespace-pre-wrap">{ann.text}</div>
+                            {ann.selectedText && (
+                                <div className="text-xs text-text-tertiary border-l-2 border-warning/50 pl-2 italic truncate">
+                                    &ldquo;{ann.selectedText}&rdquo;
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>

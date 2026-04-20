@@ -44,6 +44,9 @@ export interface ElectronAPI {
   onFrameChanged: (callback: (event: FrameChangedEvent) => void) => void;
   removeFrameListener: () => void;
 
+  // Frame anchor resolution
+  resolveFrameAnnotations: (workspacePath: string, filePath: string, plainText?: string) => Promise<{ resolved: number; error?: string }>;
+
   // Git
   gitStatus: (dirPath: string) => Promise<unknown>;
   gitDiff: (dirPath: string, file: string, staged: boolean) => Promise<string>;

@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onFrameChanged: (callback) => ipcRenderer.on('frame-changed', (event, data) => callback(data)),
     removeFrameListener: () => ipcRenderer.removeAllListeners('frame-changed'),
 
+    // FRAME anchor resolution
+    resolveFrameAnnotations: (workspacePath, filePath, plainText) =>
+        ipcRenderer.invoke('frame-resolve', workspacePath, filePath, plainText),
+
     // Search
     searchFiles: (dirPath, query, options) => ipcRenderer.invoke('search-files', dirPath, query, options),
     listFilesRecursive: (dirPath, limit) => ipcRenderer.invoke('list-files-recursive', dirPath, limit),
