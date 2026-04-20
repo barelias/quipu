@@ -1173,27 +1173,25 @@ const Editor: React.FC<EditorProps> = ({
             const contextBefore = editor.state.doc.textBetween(Math.max(0, from - 80), from, '\n');
             const contextAfter = editor.state.doc.textBetween(to, Math.min(editor.state.doc.content.size, to + 80), '\n');
 
-            // Count occurrences of selectedText up to and including 'from'
-            const fullText = editor.state.doc.textContent;
+            // Count occurrences of selectedText in the '\n'-delimited corpus
+            // (same corpus used by loadFrameAnnotations — must stay in sync)
+            const corpus = editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n');
             let occurrence: number | null = null;
             if (selectedText) {
-                let count = 0;
+                const positions: number[] = [];
                 let searchPos = 0;
-                const totalOccurrences: number[] = [];
-                while ((searchPos = fullText.indexOf(selectedText, searchPos)) !== -1) {
-                    totalOccurrences.push(searchPos);
+                while ((searchPos = corpus.indexOf(selectedText, searchPos)) !== -1) {
+                    positions.push(searchPos);
                     searchPos += selectedText.length;
                 }
-                // Find which occurrence 'from' maps to (by plain-text offset)
-                const plainTextBefore = editor.state.doc.textBetween(0, from, '\n');
-                for (let i = 0; i < totalOccurrences.length; i++) {
-                    if (totalOccurrences[i] >= plainTextBefore.length) {
-                        count = i + 1;
-                        break;
+                if (positions.length > 1) {
+                    const beforeLen = editor.state.doc.textBetween(0, from, '\n').length;
+                    let count = positions.length;
+                    for (let i = 0; i < positions.length; i++) {
+                        if (positions[i] >= beforeLen) { count = i + 1; break; }
                     }
+                    occurrence = count;
                 }
-                if (count === 0) count = totalOccurrences.length;
-                occurrence = totalOccurrences.length > 1 ? count : null;
             }
 
             // Apply comment mark directly via ProseMirror transaction to avoid

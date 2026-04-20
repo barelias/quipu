@@ -15,6 +15,11 @@ dist-ssr
 # Build artifacts
 release
 server/bin
+dist-plugins
+server/quipu-terminal-server
+
+# Claude Code internals
+.claude/
 
 # FRAME metadata (per-developer AI context)
 .quipu/meta/

@@ -10,7 +10,6 @@ import type { KeybindingEntry } from '../extensions/keybindingRegistry';
  */
 export const builtinKeybindings: KeybindingEntry[] = [
   { key: 'ctrl+s',           mac: 'cmd+s',           commandId: 'file.save' },
-  { key: 'ctrl+b',           mac: 'cmd+b',           commandId: 'view.toggleSidebar' },
   { key: 'ctrl+w',           mac: 'cmd+w',           commandId: 'file.closeTab' },
   { key: 'ctrl+tab',         mac: 'cmd+tab',         commandId: 'tab.next' },
   { key: 'ctrl+shift+tab',   mac: 'cmd+shift+tab',   commandId: 'tab.prev' },

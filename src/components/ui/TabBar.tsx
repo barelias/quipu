@@ -39,7 +39,7 @@ function SortableTab({ tab, isActive, onSwitch, onClose }: SortableTabProps) {
     <div
       ref={setNodeRef}
       style={{
-        transform: CSS.Transform.toString(transform),
+        transform: transform ? `translate3d(${Math.round(transform.x)}px, ${Math.round(transform.y)}px, 0)` : undefined,
         transition,
         opacity: isDragging ? 0.5 : 1,
         WebkitAppRegion: 'no-drag',

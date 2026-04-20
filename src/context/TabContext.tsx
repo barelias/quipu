@@ -689,16 +689,9 @@ export function TabProvider({ children }: TabProviderProps) {
         const fresh = await fs.readFile(fullPath);
         if (fresh === tab.diskContent) return;
 
-        if (tab.isDirty) {
-          setOpenTabs(prev => prev.map(t =>
-            t.id === tab.id ? { ...t, diskContent: fresh, hasConflict: true, conflictDiskContent: fresh } : t
-          ));
-        } else {
-          const updates = applyFreshContent(tab, fresh);
-          setOpenTabs(prev => prev.map(t =>
-            t.id === tab.id ? { ...t, ...updates, reloadKey: (t.reloadKey || 0) + 1 } : t
-          ));
-        }
+        setOpenTabs(prev => prev.map(t =>
+          t.id === tab.id ? { ...t, diskContent: fresh, hasConflict: true, conflictDiskContent: fresh } : t
+        ));
       } catch { /* file may be temporarily inaccessible */ }
     });
 
@@ -727,16 +720,9 @@ export function TabProvider({ children }: TabProviderProps) {
         const fresh = await fs.readFile(fullPath);
         if (fresh === tab.diskContent) return;
 
-        if (tab.isDirty) {
-          setOpenTabs(prev => prev.map(t =>
-            t.id === tab.id ? { ...t, diskContent: fresh, hasConflict: true, conflictDiskContent: fresh } : t
-          ));
-        } else {
-          const updates = applyFreshContent(tab, fresh);
-          setOpenTabs(prev => prev.map(t =>
-            t.id === tab.id ? { ...t, ...updates, reloadKey: (t.reloadKey || 0) + 1 } : t
-          ));
-        }
+        setOpenTabs(prev => prev.map(t =>
+          t.id === tab.id ? { ...t, diskContent: fresh, hasConflict: true, conflictDiskContent: fresh } : t
+        ));
       } catch { /* file may be temporarily inaccessible */ }
     });
 

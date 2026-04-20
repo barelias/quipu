@@ -40,7 +40,7 @@ export const commands: Command[] = [
   { label: 'Explorer', shortcut: 'Ctrl+Shift+E', action: 'view.explorer', category: 'View' },
   { label: 'Search', shortcut: 'Ctrl+Shift+F', action: 'view.search', category: 'View' },
   { label: 'Source Control', shortcut: 'Ctrl+Shift+G', action: 'view.git', category: 'View' },
-  { label: 'Toggle Sidebar', shortcut: 'Ctrl+B', action: 'view.toggleSidebar', category: 'View' },
+  { label: 'Toggle Sidebar', action: 'view.toggleSidebar', category: 'View' },
   { label: 'Toggle Terminal', shortcut: 'Ctrl+`', action: 'view.toggleTerminal', category: 'View' },
   { label: 'Quick Open', shortcut: 'Ctrl+P', action: 'view.quickOpen', category: 'View' },
   { label: 'Command Palette', shortcut: 'Ctrl+Shift+P', action: 'view.commandPalette', category: 'View' },

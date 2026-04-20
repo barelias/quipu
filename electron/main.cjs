@@ -784,23 +784,60 @@ app.whenReady().then(() => {
         });
     });
 
-    let watcher = null;
+    // Polling-based recursive directory watcher (works on all platforms including Linux,
+    // where fs.watch with { recursive: true } is unsupported).
+    const WATCH_SKIP_DIRS = new Set(['.git', 'node_modules', '.quipu']);
+
+    async function buildDirSnapshot(rootDir) {
+        const snap = {};
+        async function walk(dir) {
+            let entries;
+            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+            catch { return; }
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    if (WATCH_SKIP_DIRS.has(entry.name)) continue;
+                    await walk(path.join(dir, entry.name));
+                } else {
+                    const full = path.join(dir, entry.name);
+                    try { snap[full] = (await fs.promises.stat(full)).mtimeMs; }
+                    catch { /* ignore transient errors */ }
+                }
+            }
+        }
+        await walk(rootDir);
+        return snap;
+    }
+
+    let watcher = null; // holds { intervalId, rootDir }
     ipcMain.handle('watch-directory', async (event, dirPath) => {
         if (watcher) {
-            watcher.close();
+            clearInterval(watcher.intervalId);
             watcher = null;
         }
         if (!dirPath) return { success: true };
-        try {
-            watcher = fs.watch(dirPath, { recursive: true }, (eventType, filename) => {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('directory-changed', { eventType, filename });
+        let snapshot = await buildDirSnapshot(dirPath);
+        const intervalId = setInterval(async () => {
+            const next = await buildDirSnapshot(dirPath);
+            for (const [file, mtime] of Object.entries(next)) {
+                if (snapshot[file] === undefined || snapshot[file] !== mtime) {
+                    const filename = path.relative(dirPath, file).replace(/\\/g, '/');
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('directory-changed', { eventType: 'change', filename });
+                    }
                 }
-            });
-        } catch (err) {
-            // fs.watch with recursive may not be supported everywhere
-            console.warn('Directory watch failed:', err.message);
-        }
+            }
+            for (const file of Object.keys(snapshot)) {
+                if (next[file] === undefined) {
+                    const filename = path.relative(dirPath, file).replace(/\\/g, '/');
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('directory-changed', { eventType: 'rename', filename });
+                    }
+                }
+            }
+            snapshot = next;
+        }, 2000);
+        watcher = { intervalId, rootDir: dirPath };
         return { success: true };
     });
 
