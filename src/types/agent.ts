@@ -38,6 +38,16 @@ export type AgentMessageRole = 'user' | 'assistant' | 'system' | 'error' | 'perm
 
 export type AgentPermissionStatus = 'pending' | 'allowed' | 'denied';
 
+export interface AgentImageAttachment {
+  id: string;
+  /** image/png, image/jpeg, image/webp, image/gif */
+  mediaType: string;
+  /** Raw base64 payload (no data:URL prefix). */
+  base64: string;
+  /** Optional display name for the attachment chip. */
+  name?: string;
+}
+
 export interface AgentPermissionRequest {
   /** Tool use id from Claude's stream-json — used to correlate the response. */
   toolUseId: string;
@@ -68,6 +78,8 @@ export interface AgentMessage {
   toolCalls?: AgentToolCall[];
   /** Populated when role === 'permission-request'. */
   permissionRequest?: AgentPermissionRequest;
+  /** Images the user attached to their turn (user role). */
+  attachments?: AgentImageAttachment[];
 }
 
 export interface AgentSession {

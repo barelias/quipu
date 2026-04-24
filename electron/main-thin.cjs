@@ -7,7 +7,8 @@
  * (preload-thin.cjs) injects the server URL via contextBridge.
  */
 const { app, BrowserWindow, ipcMain, net: electronNet } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const netTcp = require('net');
 const http = require('http');
@@ -286,6 +287,216 @@ ipcMain.on('window-maximize', () => {
     }
 });
 ipcMain.on('window-close', () => mainWindow?.close());
+
+// -------------------- Agent runtime (shared with main.cjs) --------------------
+// These handlers power the Agent Manager feature in production builds. File
+// system / terminal / git operations go through the Go server; the claude
+// subprocess itself lives in the Electron main process so we can stream
+// stdin/stdout bidirectionally for interactive permission prompts.
+
+const agentSessions = new Map();
+
+function emitSessionEvent(agentId, sessionKey, event) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('agent-session-event', { sessionKey, agentId, event });
+    }
+}
+
+ipcMain.handle('path-exists', async (event, targetPath) => {
+    try { await fs.promises.access(targetPath); return true; } catch { return false; }
+});
+
+ipcMain.handle('get-home-dir', async () => os.homedir());
+
+ipcMain.handle('git-clone', async (event, { url, targetDir }) => {
+    if (typeof url !== 'string' || !url) throw new Error('git-clone: url required');
+    if (typeof targetDir !== 'string' || !targetDir) throw new Error('git-clone: targetDir required');
+    await fs.promises.mkdir(path.dirname(targetDir), { recursive: true });
+    return new Promise((resolve, reject) => {
+        execFile('git', ['clone', '--depth', '1', url, targetDir], { timeout: 120000 }, (err, stdout, stderr) => {
+            if (err) { reject(new Error(stderr || err.message || 'git clone failed')); return; }
+            resolve({ output: stdout + stderr });
+        });
+    });
+});
+
+ipcMain.handle('agent-session-start', async (event, { agentId, options }) => {
+    if (!agentId) throw new Error('agent-session-start: agentId required');
+    for (const [key, state] of agentSessions) {
+        if (state.agentId === agentId) return { sessionKey: key, reused: true };
+    }
+
+    const opts = options || {};
+    const args = [
+        '-p',
+        '--input-format', 'stream-json',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--permission-prompt-tool', 'stdio',
+    ];
+    if (opts.permissionMode && typeof opts.permissionMode === 'string') args.push('--permission-mode', opts.permissionMode);
+    if (opts.systemPrompt && typeof opts.systemPrompt === 'string' && opts.systemPrompt.trim()) args.push('--append-system-prompt', opts.systemPrompt);
+    if (opts.model && typeof opts.model === 'string' && opts.model.trim()) args.push('--model', opts.model);
+    if (Array.isArray(opts.addDirs)) for (const dir of opts.addDirs) if (typeof dir === 'string' && dir.length > 0) args.push('--add-dir', dir);
+    if (Array.isArray(opts.allowedTools) && opts.allowedTools.length > 0) args.push('--allowedTools', ...opts.allowedTools.filter(t => typeof t === 'string' && t.length > 0));
+    if (opts.resumeSessionId && typeof opts.resumeSessionId === 'string') args.push('--resume', opts.resumeSessionId);
+
+    const cwd = typeof opts.cwd === 'string' && opts.cwd.length > 0 ? opts.cwd : process.env.HOME;
+    let proc;
+    try {
+        proc = spawn('claude', args, { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (err) {
+        throw new Error(`Failed to spawn claude: ${err.message || String(err)}`);
+    }
+
+    const sessionKey = crypto.randomUUID();
+    const state = { proc, agentId, buffer: '' };
+    agentSessions.set(sessionKey, state);
+
+    try {
+        proc.stdin.write(JSON.stringify({
+            type: 'control_request',
+            request_id: crypto.randomUUID(),
+            request: { subtype: 'initialize', hooks: {}, sdkMcpServers: [] },
+        }) + '\n');
+    } catch { /* ignore */ }
+
+    proc.on('error', (err) => emitSessionEvent(agentId, sessionKey, { type: 'error', message: err.message || String(err) }));
+
+    proc.stdout.setEncoding('utf-8');
+    proc.stdout.on('data', (chunk) => {
+        const s = agentSessions.get(sessionKey);
+        if (!s) return;
+        s.buffer += chunk;
+        let idx;
+        while ((idx = s.buffer.indexOf('\n')) !== -1) {
+            const line = s.buffer.slice(0, idx).trim();
+            s.buffer = s.buffer.slice(idx + 1);
+            if (!line) continue;
+            try { emitSessionEvent(agentId, sessionKey, JSON.parse(line)); }
+            catch { emitSessionEvent(agentId, sessionKey, { type: 'stdout_raw', text: line }); }
+        }
+    });
+
+    proc.stderr.setEncoding('utf-8');
+    proc.stderr.on('data', (chunk) => emitSessionEvent(agentId, sessionKey, { type: 'stderr', text: chunk }));
+
+    proc.on('close', (code, signal) => {
+        const s = agentSessions.get(sessionKey);
+        if (s && s.buffer.trim().length > 0) {
+            try { emitSessionEvent(agentId, sessionKey, JSON.parse(s.buffer.trim())); }
+            catch { emitSessionEvent(agentId, sessionKey, { type: 'stdout_raw', text: s.buffer.trim() }); }
+        }
+        agentSessions.delete(sessionKey);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('agent-session-exit', { sessionKey, agentId, code, signal });
+        }
+    });
+
+    return { sessionKey, reused: false };
+});
+
+ipcMain.on('agent-session-write', (event, { sessionKey, payload }) => {
+    const s = agentSessions.get(sessionKey);
+    if (!s || !s.proc.stdin.writable) return;
+    try { s.proc.stdin.write(JSON.stringify(payload) + '\n'); }
+    catch (err) { emitSessionEvent(s.agentId, sessionKey, { type: 'error', message: `stdin write failed: ${err.message || String(err)}` }); }
+});
+
+ipcMain.handle('agent-session-stop', async (event, { sessionKey }) => {
+    const s = agentSessions.get(sessionKey);
+    if (s) {
+        try { s.proc.stdin.end(); } catch { /* ignore */ }
+        try { s.proc.kill(); } catch { /* ignore */ }
+        agentSessions.delete(sessionKey);
+    }
+    return { success: true };
+});
+
+ipcMain.handle('claude-list-slash-commands', async (event, { cwd } = {}) => {
+    return await new Promise((resolve) => {
+        let proc;
+        try {
+            proc = spawn('claude', [
+                '-p', '__probe__',
+                '--output-format', 'stream-json',
+                '--verbose',
+                '--permission-mode', 'plan',
+            ], {
+                cwd: typeof cwd === 'string' && cwd.length > 0 ? cwd : process.env.HOME,
+                env: process.env,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+        } catch (err) { resolve({ error: `spawn failed: ${err.message || String(err)}` }); return; }
+
+        let buffer = '';
+        let settled = false;
+        const finish = (payload) => {
+            if (settled) return;
+            settled = true;
+            try { proc.kill(); } catch { /* ignore */ }
+            resolve(payload);
+        };
+
+        proc.on('error', (err) => finish({ error: err.message || String(err) }));
+        proc.on('close', () => { if (!settled) finish({ error: 'claude exited before init event' }); });
+
+        const timer = setTimeout(() => finish({ error: 'timeout waiting for init event' }), 15000);
+
+        proc.stdout.setEncoding('utf-8');
+        proc.stdout.on('data', (chunk) => {
+            buffer += chunk;
+            let idx;
+            while ((idx = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, idx).trim();
+                buffer = buffer.slice(idx + 1);
+                if (!line) continue;
+                try {
+                    const ev = JSON.parse(line);
+                    if (ev && ev.type === 'system' && ev.subtype === 'init') {
+                        clearTimeout(timer);
+                        finish({
+                            slashCommands: Array.isArray(ev.slash_commands) ? ev.slash_commands : [],
+                            plugins: Array.isArray(ev.plugins) ? ev.plugins : [],
+                            skills: Array.isArray(ev.skills) ? ev.skills : [],
+                        });
+                        return;
+                    }
+                } catch { /* ignore */ }
+            }
+        });
+    });
+});
+
+// Light-weight read-directory / read-file shims so the browser-mode scan
+// fallback in claudeCommandsService works without the Go server (used for
+// reading plugin .md files from the user's ~/.claude tree).
+ipcMain.handle('read-directory', async (event, dirPath) => {
+    try {
+        const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        return entries.map(e => ({
+            name: e.name,
+            path: path.join(dirPath, e.name),
+            isDirectory: e.isDirectory(),
+        })).sort((a, b) => {
+            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+            return a.name.localeCompare(b.name);
+        });
+    } catch (err) {
+        if (err.code === 'ENOENT') return [];
+        throw err;
+    }
+});
+
+// NOTE: 'read-file' is already registered above with QUIPU_HOME_DIR sandboxing.
+// Widen it: agent context + claude-commands scanning needs to read arbitrary
+// files under the user's home (.claude tree, workspace metadata, etc.).
+// We replace the existing handler below by re-registering — Electron throws if
+// we register twice, so we instead add a dedicated handler with a distinct name.
+ipcMain.handle('read-file-abs', async (event, filePath) => {
+    try { return await fs.promises.readFile(filePath, 'utf-8'); }
+    catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+});
 
 app.whenReady().then(async () => {
     try {

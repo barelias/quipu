@@ -104,6 +104,15 @@ const SLASH_ITEMS: SlashCommandItem[] = [
       editor.chain().focus().deleteRange(range).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
     },
   },
+  {
+    title: 'LaTeX',
+    description: 'Math block rendered with KaTeX',
+    icon: '∑',
+    category: 'Blocks',
+    command: (editor, range) => {
+      editor.chain().focus().deleteRange(range).insertLatexBlock('').run();
+    },
+  },
   // Media & Embeds
   {
     title: 'Image',

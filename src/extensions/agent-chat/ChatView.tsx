@@ -13,7 +13,26 @@ import {
   ShieldIcon,
 } from '@phosphor-icons/react';
 import type { Tab } from '@/types/tab';
-import type { AgentMessage } from '@/types/agent';
+import type { AgentMessage, AgentImageAttachment } from '@/types/agent';
+
+function extFromMime(mime: string): string {
+  const m = mime.split('/')[1] ?? 'png';
+  if (m === 'jpeg') return 'jpg';
+  return m;
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : '');
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(blob);
+  });
+}
 import { useTab } from '../../context/TabContext';
 import { useAgent } from '../../context/AgentContext';
 import ThinkingIndicator from './ThinkingIndicator';
@@ -53,6 +72,7 @@ export default function ChatView({ tab }: ChatViewProps) {
   const displayName = agent?.name ?? tab.name;
 
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<AgentImageAttachment[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -86,13 +106,47 @@ export default function ChatView({ tab }: ChatViewProps) {
 
   const handleSend = async () => {
     const trimmed = input.trim();
-    if (!trimmed || !agent || active) return;
+    if ((!trimmed && attachments.length === 0) || !agent || active) return;
+    const pendingAttachments = attachments;
     setInput('');
+    setAttachments([]);
     try {
-      await sendMessage(agent.id, trimmed);
+      await sendMessage(agent.id, trimmed, pendingAttachments.length > 0 ? pendingAttachments : undefined);
     } catch {
       /* surfaced as an error message in the transcript */
     }
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const imageItems = Array.from(items).filter(i => i.type.startsWith('image/'));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    const now = Date.now();
+    const additions: AgentImageAttachment[] = [];
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      try {
+        const base64 = await blobToBase64(file);
+        additions.push({
+          id: crypto.randomUUID(),
+          mediaType: item.type,
+          base64,
+          name: file.name && file.name !== 'image.png' ? file.name : `pasted-${now}.${extFromMime(item.type)}`,
+        });
+      } catch (err) {
+        console.warn('[chat] failed to read pasted image', err);
+      }
+    }
+    if (additions.length > 0) {
+      setAttachments(prev => [...prev, ...additions]);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
   const applySlashCommand = (cmd: SlashCommand) => {
@@ -242,6 +296,27 @@ export default function ChatView({ tab }: ChatViewProps) {
               onIndexChange={setSlashIndex}
             />
           )}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-3 pt-3">
+              {attachments.map((a) => (
+                <div key={a.id} className="relative group/thumb">
+                  <img
+                    src={`data:${a.mediaType};base64,${a.base64}`}
+                    alt={a.name ?? 'pasted image'}
+                    className="h-16 w-16 rounded border border-border object-cover"
+                  />
+                  <button
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 flex items-center justify-center rounded-full bg-bg-base border border-border text-text-tertiary opacity-0 group-hover/thumb:opacity-100 hover:text-error transition-opacity"
+                    onClick={() => removeAttachment(a.id)}
+                    title="Remove attachment"
+                    aria-label="Remove attachment"
+                  >
+                    <XIcon size={10} weight="bold" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             className="w-full px-4 pt-3 pb-1 bg-transparent text-sm resize-none focus:outline-none placeholder:text-text-tertiary"
@@ -249,6 +324,7 @@ export default function ChatView({ tab }: ChatViewProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKey}
+            onPaste={handlePaste}
             placeholder={active ? 'Agent is responding…' : `Reply to ${displayName}…`}
             disabled={active || !agent}
             rows={1}
@@ -285,7 +361,7 @@ export default function ChatView({ tab }: ChatViewProps) {
                 <button
                   className="w-8 h-8 flex items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   onClick={handleSend}
-                  disabled={!input.trim() || !agent}
+                  disabled={(!input.trim() && attachments.length === 0) || !agent}
                   title="Send (Enter)"
                 >
                   <PaperPlaneTiltIcon size={13} weight="fill" />
@@ -370,11 +446,26 @@ function MessageItem({ message, isFirst, onRespondPermission }: MessageItemProps
     );
   }
   if (message.role === 'user') {
+    const imgs = message.attachments ?? [];
     return (
-      <li className={`flex justify-end ${isFirst ? '' : 'mt-8'}`}>
-        <div className="rounded-3xl bg-bg-elevated text-text-primary text-sm px-4 py-2.5 max-w-[75%] whitespace-pre-wrap break-words">
-          {message.body}
-        </div>
+      <li className={`flex flex-col items-end gap-2 ${isFirst ? '' : 'mt-8'}`}>
+        {imgs.length > 0 && (
+          <div className="flex flex-wrap gap-2 justify-end max-w-[75%]">
+            {imgs.map((a) => (
+              <img
+                key={a.id}
+                src={`data:${a.mediaType};base64,${a.base64}`}
+                alt={a.name ?? 'attached image'}
+                className="h-24 w-24 rounded-lg border border-border object-cover"
+              />
+            ))}
+          </div>
+        )}
+        {message.body && (
+          <div className="rounded-3xl bg-bg-elevated text-text-primary text-sm px-4 py-2.5 max-w-[75%] whitespace-pre-wrap break-words">
+            {message.body}
+          </div>
+        )}
       </li>
     );
   }

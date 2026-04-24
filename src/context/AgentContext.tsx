@@ -6,7 +6,7 @@ import { useFileSystem } from './FileSystemContext';
 import { useRepo } from './RepoContext';
 import { useTab } from './TabContext';
 import { useToast } from '../components/ui/Toast';
-import type { Agent, AgentMessage, AgentSession, AgentToolCall, AgentPermissionRequest } from '@/types/agent';
+import type { Agent, AgentMessage, AgentSession, AgentToolCall, AgentPermissionRequest, AgentImageAttachment } from '@/types/agent';
 
 const AGENTS_KEY = 'agents';
 const SESSIONS_KEY = 'agent-sessions';
@@ -45,7 +45,7 @@ interface AgentContextValue {
   // Sessions
   getSession: (agentId: string) => AgentSession | undefined;
   clearSession: (agentId: string) => void;
-  sendMessage: (agentId: string, body: string) => Promise<void>;
+  sendMessage: (agentId: string, body: string, attachments?: AgentImageAttachment[]) => Promise<void>;
   cancelTurn: (agentId: string) => Promise<void>;
   isTurnActive: (agentId: string) => boolean;
   respondToPermission: (agentId: string, messageId: string, decision: 'allow' | 'deny') => void;
@@ -189,6 +189,19 @@ function buildQuipuContextPrompt(
 
   lines.push('');
   lines.push(`When the user asks about annotations or frames, consult the FRAME skill (available via \`/frame\`) — it has the canonical schema and editing rules.`);
+
+  lines.push('');
+  lines.push(`## Math rendering`);
+  lines.push('');
+  lines.push(`Quipu renders LaTeX math in both chat responses and markdown files via KaTeX. You can write:`);
+  lines.push(`- Inline math with \`$...$\` — e.g. \`$\\\\int_0^1 x^2 \\\\,dx = 1/3$\``);
+  lines.push(`- Block math with \`$$...$$\` on its own paragraph — e.g.`);
+  lines.push('');
+  lines.push('  ```');
+  lines.push('  $$\\\\sum_{i=1}^n i = \\\\frac{n(n+1)}{2}$$');
+  lines.push('  ```');
+  lines.push('');
+  lines.push(`When editing \`.md\` or \`.quipu\` files, you can insert a dedicated LaTeX block node by wrapping the expression in \`$$...$$\` on its own line — Quipu's editor will render it as a KaTeX block. Use proper LaTeX syntax; KaTeX supports the common subset (no \\\\newcommand, etc.).`);
 
   return lines.join('\n');
 }
@@ -630,7 +643,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     return handle;
   }, [runtimeAvailable, workspacePath, cloneRepoForAgent, repos, handleEvent, setTurnActive, appendMessage, updateMessage]);
 
-  const sendMessage = useCallback(async (agentId: string, body: string) => {
+  const sendMessage = useCallback(async (agentId: string, body: string, attachments?: AgentImageAttachment[]) => {
     const agent = agentsRef.current.find(a => a.id === agentId);
     if (!agent) throw new Error('Unknown agent');
     if (!runtimeAvailable) {
@@ -649,6 +662,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       role: 'user',
       body,
       createdAt: new Date().toISOString(),
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
     });
 
     // Auto-name fresh chat records from the first user message. Keeps row
@@ -682,7 +696,10 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     try {
       const handle = await ensureSession(agent);
       if (!handle) throw new Error('No runtime handle.');
-      handle.sendUserMessage(body);
+      handle.sendUserMessage(
+        body,
+        attachments?.map(a => ({ mediaType: a.mediaType, base64: a.base64 })),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const stream = streamingMessageRef.current.get(agentId);

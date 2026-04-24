@@ -18,8 +18,11 @@ export interface AgentSessionCallbacks {
 
 export interface AgentSessionHandle {
   sessionKey: string;
-  /** Send a user message turn. */
-  sendUserMessage: (body: string) => void;
+  /** Send a user message turn, optionally with image attachments. */
+  sendUserMessage: (
+    body: string,
+    attachments?: Array<{ mediaType: string; base64: string }>,
+  ) => void;
   /** Respond to a `can_use_tool` control_request using its request_id. */
   respondToPermission: (
     requestId: string,
@@ -72,11 +75,31 @@ export async function startSession(
 
   return {
     sessionKey,
-    sendUserMessage: (body: string) => {
-      api.agentSessionWrite(sessionKey, {
-        type: 'user',
-        message: { role: 'user', content: body },
-      });
+    sendUserMessage: (body, attachments) => {
+      // If the turn has image attachments, use the structured content-block
+      // form so Claude sees the images alongside the text. Otherwise keep the
+      // simpler string-content shape.
+      if (attachments && attachments.length > 0) {
+        const content: Array<Record<string, unknown>> = [];
+        if (body.trim().length > 0) {
+          content.push({ type: 'text', text: body });
+        }
+        for (const img of attachments) {
+          content.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
+          });
+        }
+        api.agentSessionWrite(sessionKey, {
+          type: 'user',
+          message: { role: 'user', content },
+        });
+      } else {
+        api.agentSessionWrite(sessionKey, {
+          type: 'user',
+          message: { role: 'user', content: body },
+        });
+      }
     },
     respondToPermission: (requestId, decision, opts) => {
       // The stream-json control protocol: reply to a can_use_tool control_request

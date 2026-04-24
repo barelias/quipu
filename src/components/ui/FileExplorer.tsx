@@ -6,6 +6,7 @@ import {
   CloudIcon, CloudCheckIcon, CircleNotchIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
+import fs from '../../services/fileSystem';
 import { useFileSystem } from '../../context/FileSystemContext';
 import { useTab } from '../../context/TabContext';
 import { useKamalu } from '../../context/KamaluContext';
@@ -604,10 +605,81 @@ function KamaluSection() {
   );
 }
 
+async function blobToBase64String(blob: Blob): Promise<string> {
+  const arrayBuffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
+}
+
+function extFromMime(mime: string): string {
+  const sub = mime.split('/')[1] ?? 'png';
+  if (sub === 'jpeg') return 'jpg';
+  if (sub === 'svg+xml') return 'svg';
+  return sub;
+}
+
 export default function FileExplorer() {
   const { workspacePath, fileTree, openFolder, refreshDirectory, renameEntry, createNewFile, createNewFolder } = useFileSystem();
   const { openFile } = useTab();
   const { status: kamaluStatus } = useKamalu();
+  const { showToast } = useToast();
+
+  // Paste images from clipboard into the workspace root.
+  const pasteImagesFromClipboard = useCallback(async () => {
+    if (!workspacePath) return;
+    // navigator.clipboard.read is async-only and limited in some contexts;
+    // silently bail when unavailable.
+    const clipboard = (navigator as Navigator & { clipboard?: Clipboard }).clipboard;
+    if (!clipboard || typeof clipboard.read !== 'function') {
+      showToast('Clipboard access unavailable in this context.', 'warning');
+      return;
+    }
+    let items: ClipboardItem[];
+    try {
+      items = await clipboard.read();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Clipboard read failed: ${msg}`, 'error');
+      return;
+    }
+    const imageBlobs: Array<{ mediaType: string; blob: Blob }> = [];
+    for (const item of items) {
+      for (const type of item.types) {
+        if (type.startsWith('image/')) {
+          try {
+            const blob = await item.getType(type);
+            imageBlobs.push({ mediaType: type, blob });
+          } catch { /* skip */ }
+        }
+      }
+    }
+    if (imageBlobs.length === 0) {
+      showToast('No images in clipboard.', 'info');
+      return;
+    }
+    const base = workspacePath.replace(/\/+$/, '');
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').replace(/\..+$/, '');
+    let n = 0;
+    for (const { mediaType, blob } of imageBlobs) {
+      n += 1;
+      const ext = extFromMime(mediaType);
+      const targetPath = `${base}/pasted-${stamp}-${n}.${ext}`;
+      try {
+        const base64 = await blobToBase64String(blob);
+        await fs.uploadImage(targetPath, base64);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast(`Failed to save image ${n}: ${msg}`, 'error');
+      }
+    }
+    await refreshDirectory(workspacePath);
+    showToast(`Pasted ${imageBlobs.length} image${imageBlobs.length === 1 ? '' : 's'} into workspace.`, 'success');
+  }, [workspacePath, refreshDirectory, showToast]);
   const [isRootDragOver, setIsRootDragOver] = useState<boolean>(false);
   const [rootContextMenu, setRootContextMenu] = useState<ContextMenuPosition | null>(null);
   const [isRootCreating, setIsRootCreating] = useState<CreatingType>(null);
@@ -713,8 +785,23 @@ export default function FileExplorer() {
     renameEntry(sourcePath, newPath);
   }, [workspacePath, renameEntry]);
 
+  const handleExplorerKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Intercept Ctrl+V / Cmd+V so users can paste clipboard images straight
+    // into the workspace. Skip when the event originated from an input/textarea
+    // inside the tree (rename/create inline editors).
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+      e.preventDefault();
+      void pasteImagesFromClipboard();
+    }
+  }, [pasteImagesFromClipboard]);
+
   return (
-    <div className="bg-bg-surface text-text-primary flex flex-col select-none text-[13px] font-sans flex-1 overflow-hidden">
+    <div
+      className="bg-bg-surface text-text-primary flex flex-col select-none text-[13px] font-sans flex-1 overflow-hidden outline-none"
+      tabIndex={0}
+      onKeyDown={handleExplorerKeyDown}>
       <div className="h-[35px] flex items-center gap-2 px-4 border-b border-border shrink-0">
         <div
           className="w-5 h-5 rounded bg-accent/15 flex items-center justify-center shrink-0 cursor-pointer"
@@ -789,6 +876,12 @@ export default function FileExplorer() {
                   { label: 'New File', onClick: handleRootNewFile },
                   { label: 'New Folder', onClick: handleRootNewFolder },
                   { label: 'New Database', onClick: handleRootNewDatabase },
+                  { separator: true } as const,
+                  {
+                    label: 'Paste image(s) from clipboard',
+                    shortcut: 'Ctrl+V',
+                    onClick: () => { setRootContextMenu(null); void pasteImagesFromClipboard(); },
+                  },
                   ...(kamaluStatus === 'connected'
                     ? [
                         { separator: true } as const,

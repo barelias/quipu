@@ -27,6 +27,7 @@ import { FindReplace } from './extensions/FindReplace';
 import { WikiLink, wikiLinksToHTML } from './extensions/WikiLink';
 import { CodeBlockWithLang } from './extensions/CodeBlockWithLang';
 import { EmbeddedDatabase } from './extensions/EmbeddedDatabase';
+import { LatexBlock } from './extensions/LatexBlock';
 import { SlashCommand } from './extensions/SlashCommand';
 import type { SlashCommandItem } from './extensions/SlashCommand';
 import FindBar from './FindBar';
@@ -497,6 +498,7 @@ const Editor: React.FC<EditorProps> = ({
                 transformCopiedText: true,
             }),
             EmbeddedDatabase,
+            LatexBlock,
             SlashCommand.configure({
                 suggestion: {
                     render: () => {
@@ -1561,6 +1563,13 @@ const Editor: React.FC<EditorProps> = ({
                         disabled={editor.isActive('table')}
                     >
                         <TableIcon size={16} />
+                    </ToolbarButton>
+                    <ToolbarButton
+                        onClick={() => editor.chain().focus().insertLatexBlock('').run()}
+                        isActive={editor.isActive('latexBlock')}
+                        title="Insert LaTeX math block"
+                    >
+                        <span className="text-[15px] font-serif font-semibold leading-none">∑</span>
                     </ToolbarButton>
 
                     <div className="flex-1" />
