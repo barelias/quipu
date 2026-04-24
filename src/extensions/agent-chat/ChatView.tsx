@@ -13,7 +13,7 @@ import {
   ShieldIcon,
 } from '@phosphor-icons/react';
 import type { Tab } from '@/types/tab';
-import type { AgentMessage, AgentImageAttachment } from '@/types/agent';
+import type { AgentMessage, AgentImageAttachment, AgentToolCall, AgentPermissionRequest } from '@/types/agent';
 
 function extFromMime(mime: string): string {
   const m = mime.split('/')[1] ?? 'png';
@@ -404,40 +404,50 @@ function MessageItem({ message, isFirst, onRespondPermission }: MessageItemProps
   if (message.role === 'permission-request' && message.permissionRequest) {
     const req = message.permissionRequest;
     const pending = req.status === 'pending';
+    const isQuestion = req.toolName === 'AskUserQuestion';
+    const headerLabel = isQuestion ? 'Question' : 'Permission requested';
+    const HeaderIcon = ShieldIcon;
     return (
       <li className={`${isFirst ? '' : 'mt-6'}`}>
         <div className="rounded-xl border border-warning/50 bg-warning/10 px-4 py-3">
           <div className="flex items-center gap-2 mb-2">
-            <ShieldIcon size={14} className="text-warning shrink-0" weight="fill" />
-            <span className="text-xs font-semibold text-warning uppercase tracking-wider">Permission requested</span>
+            <HeaderIcon size={14} className="text-warning shrink-0" weight="fill" />
+            <span className="text-xs font-semibold text-warning uppercase tracking-wider">{headerLabel}</span>
             {!pending && (
               <span className={`text-[11px] px-2 py-0.5 rounded ${req.status === 'allowed' ? 'bg-success/20 text-success' : 'bg-error/20 text-error'}`}>
                 {req.status}
               </span>
             )}
           </div>
-          <div className="text-sm font-mono text-text-primary break-words mb-2">{req.summary}</div>
-          {req.inputJson && req.inputJson !== '{}' && (
-            <details className="mb-3">
-              <summary className="text-[11px] text-text-tertiary cursor-pointer hover:text-text-secondary">Show raw input</summary>
-              <pre className="mt-1 text-[11px] bg-bg-base rounded border border-border p-2 overflow-x-auto font-mono">{req.inputJson}</pre>
-            </details>
-          )}
+
+          {isQuestion
+            ? <AskQuestionBody input={req.input} />
+            : (
+              <>
+                <div className="text-sm break-words mb-2">
+                  <span className="font-semibold">{req.action}</span>
+                  {req.path && <span className="ml-2 font-mono text-text-secondary">{req.path}</span>}
+                  {req.detail && <span className="ml-2 font-mono text-text-secondary">{req.detail}</span>}
+                </div>
+                <ToolDetail action={req.action} input={req.input} />
+              </>
+            )}
+
           {pending && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mt-3">
               <button
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-success text-white hover:opacity-90 transition-opacity"
                 onClick={() => onRespondPermission('allow')}
               >
                 <CheckIcon size={12} weight="bold" />
-                Allow once
+                {isQuestion ? 'Let agent answer' : 'Allow once'}
               </button>
               <button
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-border text-text-secondary hover:text-error hover:border-error transition-colors"
                 onClick={() => onRespondPermission('deny')}
               >
                 <XIcon size={12} weight="bold" />
-                Deny
+                {isQuestion ? 'Cancel' : 'Deny'}
               </button>
             </div>
           )}
@@ -485,14 +495,7 @@ function MessageItem({ message, isFirst, onRespondPermission }: MessageItemProps
       {message.toolCalls && message.toolCalls.length > 0 && (
         <ul className="flex flex-col gap-1 mb-2">
           {message.toolCalls.map((call) => (
-            <li
-              key={call.id}
-              className="inline-flex items-center gap-1.5 self-start max-w-full px-2 py-1 rounded-full bg-bg-elevated text-[11px] text-text-secondary"
-              title={call.name}
-            >
-              <WrenchIcon size={11} className="text-text-tertiary shrink-0" />
-              <span className="truncate font-mono">{call.summary}</span>
-            </li>
+            <ToolChip key={call.id} call={call} />
           ))}
         </ul>
       )}
@@ -505,5 +508,127 @@ function MessageItem({ message, isFirst, onRespondPermission }: MessageItemProps
         <span className="inline-block ml-0.5 w-1.5 h-4 bg-accent align-middle animate-pulse" />
       )}
     </li>
+  );
+}
+
+// ---- Tool chip + detail renderers ----
+
+function ToolChip({ call }: { call: AgentToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+  const canExpand = call.action === 'Edit' || call.action === 'MultiEdit' || !!call.detail;
+  return (
+    <li className="flex flex-col self-start max-w-full">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1.5 self-start max-w-full px-2 py-1 rounded-full bg-bg-elevated text-[11px] text-text-secondary hover:bg-bg-surface transition-colors"
+        onClick={() => canExpand && setExpanded(v => !v)}
+        title={canExpand ? (expanded ? 'Collapse' : 'Show details') : call.name}
+      >
+        <WrenchIcon size={11} className="text-text-tertiary shrink-0" />
+        <span className="font-semibold text-text-primary">{call.action}</span>
+        {call.path && <span className="font-mono truncate">{call.path}</span>}
+        {call.detail && !call.path && <span className="font-mono truncate">{call.detail}</span>}
+      </button>
+      {expanded && (
+        <div className="mt-1 ml-2">
+          <ToolDetail action={call.action} input={call.input} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ToolDetail({ action, input }: { action: string; input?: Record<string, unknown> }) {
+  if (!input) return null;
+  if (action === 'Edit' || action === 'MultiEdit') {
+    return <EditDiff input={input} />;
+  }
+  if (action === 'Bash') {
+    const cmd = typeof input.command === 'string' ? input.command : '';
+    if (!cmd) return null;
+    return (
+      <pre className="text-[11px] bg-bg-base rounded border border-border p-2 overflow-x-auto font-mono whitespace-pre-wrap">{cmd}</pre>
+    );
+  }
+  if (action === 'Write') {
+    const content = typeof input.content === 'string' ? input.content : '';
+    if (!content) return null;
+    return (
+      <pre className="text-[11px] bg-bg-base rounded border border-border p-2 overflow-x-auto font-mono whitespace-pre-wrap max-h-64">{content}</pre>
+    );
+  }
+  return null;
+}
+
+interface EditPatch { old: string; new: string; }
+
+function EditDiff({ input }: { input: Record<string, unknown> }) {
+  const patches: EditPatch[] = [];
+  if (Array.isArray(input.edits)) {
+    for (const e of input.edits) {
+      if (e && typeof e === 'object') {
+        const obj = e as Record<string, unknown>;
+        patches.push({
+          old: typeof obj.old_string === 'string' ? obj.old_string : '',
+          new: typeof obj.new_string === 'string' ? obj.new_string : '',
+        });
+      }
+    }
+  } else {
+    patches.push({
+      old: typeof input.old_string === 'string' ? input.old_string : '',
+      new: typeof input.new_string === 'string' ? input.new_string : '',
+    });
+  }
+  if (patches.length === 0 || patches.every(p => !p.old && !p.new)) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {patches.map((p, i) => (
+        <div key={i} className="grid grid-cols-2 gap-1 rounded border border-border overflow-hidden">
+          <div className="bg-error/10 text-[11px] font-mono p-2 whitespace-pre-wrap break-words max-h-64 overflow-auto">
+            <div className="text-[9px] font-semibold uppercase tracking-wider text-error mb-1">− Before</div>
+            <div className="text-text-primary">{p.old || <span className="text-text-tertiary italic">(empty)</span>}</div>
+          </div>
+          <div className="bg-success/10 text-[11px] font-mono p-2 whitespace-pre-wrap break-words max-h-64 overflow-auto">
+            <div className="text-[9px] font-semibold uppercase tracking-wider text-success mb-1">+ After</div>
+            <div className="text-text-primary">{p.new || <span className="text-text-tertiary italic">(empty)</span>}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface AskQuestion {
+  question: string;
+  header?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multiSelect?: boolean;
+}
+
+function AskQuestionBody({ input }: { input?: AgentPermissionRequest['input'] }) {
+  if (!input || !Array.isArray(input.questions)) return null;
+  const qs = input.questions as AskQuestion[];
+  return (
+    <div className="flex flex-col gap-3">
+      {qs.map((q, i) => (
+        <div key={i} className="bg-bg-surface rounded-lg border border-border p-3">
+          {q.header && (
+            <div className="text-[9px] font-semibold uppercase tracking-wider text-text-tertiary mb-1">{q.header}</div>
+          )}
+          <div className="text-sm text-text-primary mb-2">{q.question}</div>
+          {q.options && q.options.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {q.options.map((opt, j) => (
+                <li key={j} className="flex items-baseline gap-2 text-xs">
+                  <span className="font-semibold text-accent shrink-0">{opt.label}</span>
+                  {opt.description && <span className="text-text-secondary">{opt.description}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }

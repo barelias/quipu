@@ -52,10 +52,14 @@ export interface AgentPermissionRequest {
   /** Tool use id from Claude's stream-json — used to correlate the response. */
   toolUseId: string;
   toolName: string;
-  /** Short summary ready for UI (e.g. "Bash: curl …"). */
-  summary: string;
-  /** Raw input for the tool call, serialized. */
-  inputJson: string;
+  /** Action verb shown bold (e.g. "Read", "Edit", "Bash"). */
+  action: string;
+  /** Short path display. */
+  path?: string;
+  /** Freeform detail (e.g. command). */
+  detail?: string;
+  /** Original raw input for diff/question rendering. */
+  input?: Record<string, unknown>;
   status: AgentPermissionStatus;
   decidedAt?: string;
 }
@@ -63,8 +67,14 @@ export interface AgentPermissionRequest {
 export interface AgentToolCall {
   id: string;
   name: string;
-  /** Short one-line summary derived from the tool input (e.g. "Read src/App.tsx"). */
-  summary: string;
+  /** Action verb shown bold (e.g. "Read", "Edit", "Bash"). */
+  action: string;
+  /** Short path display — relative when possible, filename when too long. */
+  path?: string;
+  /** Freeform detail (e.g. a bash command or grep pattern). */
+  detail?: string;
+  /** Original raw input for expandable/diff renderings. */
+  input?: Record<string, unknown>;
 }
 
 export interface AgentMessage {

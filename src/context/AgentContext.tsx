@@ -54,40 +54,81 @@ interface AgentContextValue {
 
 const AgentContext = createContext<AgentContextValue | null>(null);
 
-function summarizeToolUse(name: string, rawInput: unknown): string {
+/**
+ * Strip the workspace prefix from a path; if still too long, collapse to the
+ * basename. Matches the path-display convention Claude Code uses.
+ */
+function shortenPath(path: string, workspacePath: string | null, maxLen = 48): string {
+  let out = path;
+  if (workspacePath) {
+    const base = workspacePath.replace(/\/+$/, '');
+    if (out.startsWith(base + '/')) out = out.slice(base.length + 1);
+    // Also collapse per-agent tmp/<id>/repos/<name>/ prefix to repos/<name>/ for readability.
+    out = out.replace(/^tmp\/[^/]+\/repos\/([^/]+)\//, 'repos/$1/');
+  }
+  if (out.length > maxLen) {
+    const name = out.split('/').pop() ?? out;
+    out = name.length <= maxLen ? name : `${name.slice(0, maxLen - 1)}…`;
+  }
+  return out;
+}
+
+function trim(s: string, max = 96): string {
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+interface ToolDescription {
+  action: string;
+  path?: string;
+  detail?: string;
+  input?: Record<string, unknown>;
+}
+
+function describeToolUse(name: string, rawInput: unknown, workspacePath: string | null): ToolDescription {
   const input = (rawInput && typeof rawInput === 'object') ? (rawInput as Record<string, unknown>) : {};
-  const trim = (s: string, max = 96) => (s.length > max ? s.slice(0, max - 1) + '…' : s);
   switch (name) {
     case 'Read':
     case 'Write':
     case 'Edit':
+    case 'MultiEdit':
     case 'NotebookEdit': {
-      const path = typeof input.file_path === 'string' ? input.file_path : '';
-      return path ? `${name} ${trim(path)}` : name;
+      const fp = typeof input.file_path === 'string' ? input.file_path : '';
+      return { action: name, path: fp ? shortenPath(fp, workspacePath) : undefined, input };
     }
     case 'Bash': {
       const cmd = typeof input.command === 'string' ? input.command.replace(/\s+/g, ' ') : '';
-      return cmd ? `Bash: ${trim(cmd)}` : 'Bash';
+      return { action: 'Bash', detail: cmd ? trim(cmd) : undefined, input };
     }
     case 'Grep': {
       const pattern = typeof input.pattern === 'string' ? input.pattern : '';
-      const path = typeof input.path === 'string' ? ` in ${input.path}` : '';
-      return pattern ? `Grep ${trim(pattern)}${path}` : 'Grep';
+      const p = typeof input.path === 'string' ? input.path : '';
+      const detail = pattern + (p ? ` in ${shortenPath(p, workspacePath, 32)}` : '');
+      return { action: 'Grep', detail: detail ? trim(detail) : undefined, input };
     }
     case 'Glob': {
       const pattern = typeof input.pattern === 'string' ? input.pattern : '';
-      return pattern ? `Glob ${trim(pattern)}` : 'Glob';
+      return { action: 'Glob', detail: pattern ? trim(pattern) : undefined, input };
     }
     case 'WebFetch':
     case 'WebSearch': {
       const q = typeof input.url === 'string' ? input.url : (typeof input.query === 'string' ? input.query : '');
-      return q ? `${name} ${trim(q)}` : name;
+      return { action: name, detail: q ? trim(q) : undefined, input };
     }
     case 'TodoWrite':
-      return 'Updated todo list';
+      return { action: 'TodoWrite', detail: 'Updated todo list', input };
+    case 'AskUserQuestion':
+      return { action: 'AskUserQuestion', input };
     default:
-      return name;
+      return { action: name, input };
   }
+}
+
+/** Legacy path for the result-event denial renderer. */
+function summarizeToolUse(name: string, rawInput: unknown, workspacePath: string | null = null): string {
+  const d = describeToolUse(name, rawInput, workspacePath);
+  if (d.path) return `${d.action} ${d.path}`;
+  if (d.detail) return `${d.action}: ${d.detail}`;
+  return d.action;
 }
 
 interface ResolvedBinding {
@@ -499,10 +540,14 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
           accumulated += block.text;
         }
         if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+          const d = describeToolUse(block.name, block.input, workspacePath);
           newToolCalls.push({
             id: block.id,
             name: block.name,
-            summary: summarizeToolUse(block.name, block.input),
+            action: d.action,
+            path: d.path,
+            detail: d.detail,
+            input: d.input,
           });
         }
       }
@@ -539,7 +584,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         const lines = denials.map((d) => {
           const obj = (d && typeof d === 'object') ? d as Record<string, unknown> : {};
           const toolName = typeof obj.tool_name === 'string' ? obj.tool_name : 'Tool';
-          return `• ${summarizeToolUse(toolName, obj.tool_input)}`;
+          return `• ${summarizeToolUse(toolName, obj.tool_input, workspacePath)}`;
         }).join('\n');
         appendMessage(agentId, {
           id: crypto.randomUUID(),
@@ -562,12 +607,15 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         : {};
       if (inner.subtype === 'can_use_tool' && requestId) {
         const toolName = typeof inner.tool_name === 'string' ? inner.tool_name : 'Tool';
-        const input = (inner.input && typeof inner.input === 'object') ? inner.input : {};
+        const input = (inner.input && typeof inner.input === 'object') ? inner.input as Record<string, unknown> : {};
+        const d = describeToolUse(toolName, input, workspacePath);
         const request: AgentPermissionRequest = {
           toolUseId: requestId,
           toolName,
-          summary: summarizeToolUse(toolName, input),
-          inputJson: (() => { try { return JSON.stringify(input, null, 2); } catch { return ''; } })(),
+          action: d.action,
+          path: d.path,
+          detail: d.detail,
+          input: d.input,
           status: 'pending',
         };
         appendMessage(agentId, {
