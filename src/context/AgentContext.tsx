@@ -20,6 +20,12 @@ export interface AgentFolders {
 
 const EMPTY_FOLDERS: AgentFolders = { chats: [], agents: [] };
 
+/** Composer draft state carried per-agent across tab switches. */
+export interface AgentDraft {
+  input: string;
+  attachments: AgentImageAttachment[];
+}
+
 interface AgentContextValue {
   agents: Agent[];
   folders: AgentFolders;
@@ -48,7 +54,18 @@ interface AgentContextValue {
   isTurnActive: (agentId: string) => boolean;
   respondToPermission: (agentId: string, messageId: string, decision: 'allow' | 'deny') => void;
   runtimeAvailable: boolean;
+
+  // Per-chat composer drafts (in-memory only, transient — not persisted).
+  /** Read the agent's draft. Returns a stable empty default if none is stored —
+   *  callers that compare references frame-to-frame can rely on that stability. */
+  getDraft: (agentId: string) => AgentDraft;
+  /** Merge a patch into the agent's draft. If the resulting draft is empty
+   *  (no input AND no attachments), the entry is removed from the Map. */
+  setDraft: (agentId: string, patch: Partial<AgentDraft>) => void;
 }
+
+/** Stable empty draft default — returned by `getDraft` when no entry exists. */
+const EMPTY_DRAFT: AgentDraft = Object.freeze({ input: '', attachments: [] as AgentImageAttachment[] }) as AgentDraft;
 
 const AgentContext = createContext<AgentContextValue | null>(null);
 
@@ -262,6 +279,11 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   const sessionHandlesRef = useRef<Map<string, AgentSessionHandle>>(new Map());
   // Assistant message currently being streamed per agent.
   const streamingMessageRef = useRef<Map<string, { messageId: string; accumulated: string; anthropicMessageId: string | null }>>(new Map());
+  // Per-chat composer drafts. Refs (not state) so a keystroke does not re-render
+  // every consumer; ChatView holds its own local React state for the live
+  // textarea value and pushes back here on each change. Lives only for the
+  // lifetime of the AgentProvider — drafts are intentionally NOT persisted.
+  const draftsRef = useRef<Map<string, AgentDraft>>(new Map());
 
   const sessionsRef = useRef<SessionMap>(sessions);
   useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
@@ -304,6 +326,9 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     setSessions({});
     setActiveTurns({});
     streamingMessageRef.current.clear();
+    // Per-chat drafts belong to the previous workspace's agents; drop them so
+    // the new workspace's chats start with empty composers.
+    draftsRef.current.clear();
     const handles = sessionHandlesRef.current;
     sessionHandlesRef.current = new Map();
     for (const handle of handles.values()) {
@@ -494,6 +519,9 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
 
   const deleteAgent = useCallback((id: string) => {
     void killSession(id);
+    // Drop any in-memory composer draft for this agent so a future agent that
+    // somehow reuses the id (or just to free the entry) doesn't see stale text.
+    draftsRef.current.delete(id);
     setAgents(prev => prev.filter(a => a.id !== id));
     setSessions(prev => {
       if (!prev[id]) return prev;
@@ -843,6 +871,28 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     setTurnActive(agentId, false);
   }, [killSession, setTurnActive]);
 
+  const getDraft = useCallback((agentId: string): AgentDraft => {
+    // Return the stable empty default when no entry exists. Allocating a fresh
+    // object here would break referential equality across renders and defeat
+    // memoization in any consumer that uses the draft as an effect dep.
+    return draftsRef.current.get(agentId) ?? EMPTY_DRAFT;
+  }, []);
+
+  const setDraft = useCallback((agentId: string, patch: Partial<AgentDraft>) => {
+    const current = draftsRef.current.get(agentId) ?? EMPTY_DRAFT;
+    const next: AgentDraft = {
+      input: patch.input !== undefined ? patch.input : current.input,
+      attachments: patch.attachments !== undefined ? patch.attachments : current.attachments,
+    };
+    if (next.input === '' && next.attachments.length === 0) {
+      // Empty drafts don't need a Map entry — saves memory and prevents key
+      // accumulation for sent-and-cleared chats.
+      draftsRef.current.delete(agentId);
+      return;
+    }
+    draftsRef.current.set(agentId, next);
+  }, []);
+
   const respondToPermission = useCallback((agentId: string, messageId: string, decision: 'allow' | 'deny') => {
     const session = sessionsRef.current[agentId];
     const message = session?.messages.find(m => m.id === messageId);
@@ -880,6 +930,8 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     isTurnActive,
     respondToPermission,
     runtimeAvailable,
+    getDraft,
+    setDraft,
   };
 
   return <AgentContext.Provider value={value}>{children}</AgentContext.Provider>;

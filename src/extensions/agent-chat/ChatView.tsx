@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   RobotIcon,
   PencilSimpleIcon,
@@ -139,6 +139,8 @@ export default function ChatView({ tab }: ChatViewProps) {
     upsertAgent,
     ensureAgentClones,
     runtimeAvailable,
+    getDraft,
+    setDraft,
   } = useAgent();
   const agentId = tab.path.replace(/^agent:\/\//, '');
 
@@ -152,8 +154,25 @@ export default function ChatView({ tab }: ChatViewProps) {
   const active = isTurnActive(agentId);
   const displayName = agent?.name ?? tab.name;
 
-  const [input, setInput] = useState('');
-  const [attachments, setAttachments] = useState<AgentImageAttachment[]>([]);
+  // Seed composer state from the per-chat draft on first mount. The draft
+  // lives in AgentContext so switching tabs (which would otherwise reset
+  // local state because we share one ChatView instance per viewer slot)
+  // preserves the previous chat's text and restores it when we return.
+  const initialDraft = useMemo(() => getDraft(agentId), [agentId, getDraft]);
+  const [input, setInput] = useState(initialDraft.input);
+  const [attachments, setAttachments] = useState<AgentImageAttachment[]>(initialDraft.attachments);
+
+  // When the active agent changes (tab switch in the same ChatView slot),
+  // reset local state to the new agent's stored draft. We intentionally exclude
+  // `getDraft` from the dep array because it's a stable useCallback — adding it
+  // would not change behavior, but linting against unstable callbacks is what
+  // the eslint-disable below acknowledges.
+  useEffect(() => {
+    const d = getDraft(agentId);
+    setInput(d.input);
+    setAttachments(d.attachments);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-seed only when agentId flips
+  }, [agentId]);
   const [slashIndex, setSlashIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -191,6 +210,9 @@ export default function ChatView({ tab }: ChatViewProps) {
     const pendingAttachments = attachments;
     setInput('');
     setAttachments([]);
+    // Mirror the local clear into the per-chat draft store — passing empty
+    // values causes setDraft to drop the entry entirely.
+    setDraft(agent.id, { input: '', attachments: [] });
     try {
       await sendMessage(agent.id, trimmed, pendingAttachments.length > 0 ? pendingAttachments : undefined);
     } catch {
@@ -222,21 +244,31 @@ export default function ChatView({ tab }: ChatViewProps) {
       }
     }
     if (additions.length > 0) {
-      setAttachments(prev => [...prev, ...additions]);
+      setAttachments(prev => {
+        const next = [...prev, ...additions];
+        setDraft(agentId, { attachments: next });
+        return next;
+      });
     }
   };
 
   const removeAttachment = (id: string) => {
-    setAttachments(prev => prev.filter(a => a.id !== id));
+    setAttachments(prev => {
+      const next = prev.filter(a => a.id !== id);
+      setDraft(agentId, { attachments: next });
+      return next;
+    });
   };
 
   const applySlashCommand = (cmd: SlashCommand) => {
     if (cmd.id === 'clear') {
       setInput('');
+      setDraft(agentId, { input: '' });
       handleClear();
       return;
     }
     setInput(cmd.template);
+    setDraft(agentId, { input: cmd.template });
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -267,6 +299,7 @@ export default function ChatView({ tab }: ChatViewProps) {
       if (e.key === 'Escape') {
         e.preventDefault();
         setInput('');
+        setDraft(agentId, { input: '' });
         return;
       }
     }
@@ -406,7 +439,14 @@ export default function ChatView({ tab }: ChatViewProps) {
             className="w-full px-4 pt-3 pb-1 bg-transparent text-sm resize-none focus:outline-none placeholder:text-text-tertiary"
             style={{ minHeight: '44px', maxHeight: '200px' }}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInput(v);
+              // Eager push-back to the per-chat draft store. One Map write per
+              // keystroke is fine; the ref-based store does not trigger
+              // consumer re-renders.
+              setDraft(agentId, { input: v });
+            }}
             onKeyDown={handleKey}
             onPaste={handlePaste}
             placeholder={active ? 'Agent is responding…' : `Reply to ${displayName}…`}
