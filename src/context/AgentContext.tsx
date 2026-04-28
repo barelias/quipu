@@ -6,11 +6,9 @@ import { useFileSystem } from './FileSystemContext';
 import { useRepo } from './RepoContext';
 import { useTab } from './TabContext';
 import { useToast } from '../components/ui/Toast';
+import { agentsKey, agentSessionsKey, agentFoldersKey } from '../services/workspaceKeys';
+import { migrateGlobalKeysIfNeeded } from '../services/workspaceKeysMigration';
 import type { Agent, AgentMessage, AgentSession, AgentToolCall, AgentPermissionRequest, AgentImageAttachment } from '@/types/agent';
-
-const AGENTS_KEY = 'agents';
-const SESSIONS_KEY = 'agent-sessions';
-const FOLDERS_KEY = 'agent-folders';
 
 type SessionMap = Record<string, AgentSession>;
 
@@ -271,14 +269,73 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   const agentsRef = useRef<Agent[]>(agents);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
 
+  // Tracks which workspacePath the in-memory `agents`/`sessions`/`folders`
+  // belong to. Synchronously cleared at the top of the load effect (before the
+  // setStates that reset state) and synchronously set when a load completes —
+  // both done via this ref rather than a state value because save effects need
+  // a same-render barrier. Without this, the save effects would fire during
+  // the workspace transition (when their `workspacePath` dep changed but
+  // `agents`/`sessions`/`folders` still hold the previous workspace's data),
+  // writing the previous workspace's data into the new workspace's storage
+  // key — a silent corruption of the new workspace.
+  const loadedWorkspaceRef = useRef<string | null>(null);
+
+  // Load (and reload on workspace switch). Storage keys are scoped to the
+  // current workspace; while `workspacePath` is null we present empty state and
+  // never write, so a no-workspace window cannot accidentally clobber data.
+  // The `cancelled` flag protects against rapid workspace switches: a stale
+  // load that resolves after the user has already moved to a different
+  // workspace must not overwrite the new workspace's just-loaded state.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      storage.get(AGENTS_KEY).catch(() => null),
-      storage.get(SESSIONS_KEY).catch(() => null),
-      storage.get(FOLDERS_KEY).catch(() => null),
-    ]).then(([savedAgents, savedSessions, savedFolders]) => {
+
+    // Synchronously invalidate the loaded-workspace barrier so save effects
+    // that fire later in this same effect cycle (because their `workspacePath`
+    // dep just changed) bail out instead of writing the previous workspace's
+    // in-memory data into the new workspace's storage key.
+    loadedWorkspaceRef.current = null;
+
+    // Reset on every workspace change. Sessions are killed because their
+    // handles point at the previous workspace's `cwd` and would mutate the
+    // wrong tree if the user resumed them.
+    setIsLoaded(false);
+    setAgents([]);
+    setFolders(EMPTY_FOLDERS);
+    setSessions({});
+    setActiveTurns({});
+    streamingMessageRef.current.clear();
+    const handles = sessionHandlesRef.current;
+    sessionHandlesRef.current = new Map();
+    for (const handle of handles.values()) {
+      try { void handle.stop(); } catch { /* ignore */ }
+    }
+
+    if (!workspacePath) {
+      return () => { cancelled = true; };
+    }
+
+    const aKey = agentsKey(workspacePath);
+    const sKey = agentSessionsKey(workspacePath);
+    const fKey = agentFoldersKey(workspacePath);
+
+    (async () => {
+      try {
+        await migrateGlobalKeysIfNeeded(workspacePath);
+      } catch (err) {
+        // Migration failure must not block workspace open. The corresponding
+        // scoped keys will simply be empty on first read; the user can re-key
+        // by hand if needed.
+        console.warn('[agent] migrateGlobalKeysIfNeeded failed', err);
+      }
       if (cancelled) return;
+
+      const [savedAgents, savedSessions, savedFolders] = await Promise.all([
+        storage.get(aKey).catch(() => null),
+        storage.get(sKey).catch(() => null),
+        storage.get(fKey).catch(() => null),
+      ]);
+      if (cancelled) return;
+
       if (savedFolders && typeof savedFolders === 'object') {
         const f = savedFolders as Partial<AgentFolders>;
         setFolders({
@@ -299,25 +356,40 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       if (savedSessions && typeof savedSessions === 'object') {
         setSessions(savedSessions as SessionMap);
       }
+      // Mark this workspace as the source-of-truth BEFORE flipping isLoaded so
+      // the save effects (which fire on the resulting render) see the matching
+      // ref and write back to the correct key.
+      loadedWorkspaceRef.current = workspacePath;
       setIsLoaded(true);
-    });
+    })();
+
     return () => { cancelled = true; };
-  }, []);
+  }, [workspacePath]);
+
+  // Save effects guard on `isLoaded && workspacePath` AND on the
+  // `loadedWorkspaceRef` matching the current workspacePath. The ref check is
+  // what prevents the cross-workspace data corruption described above: if the
+  // workspacePath dep changed but the new workspace's load hasn't completed
+  // (or is in flight), the ref is null and the save is skipped, so the
+  // previous workspace's `agents` value never gets written into the new
+  // workspace's storage key.
+  useEffect(() => {
+    if (!isLoaded || !workspacePath) return;
+    if (loadedWorkspaceRef.current !== workspacePath) return;
+    storage.set(agentsKey(workspacePath), agents).catch(() => {});
+  }, [agents, isLoaded, workspacePath]);
 
   useEffect(() => {
-    if (!isLoaded) return;
-    storage.set(AGENTS_KEY, agents).catch(() => {});
-  }, [agents, isLoaded]);
+    if (!isLoaded || !workspacePath) return;
+    if (loadedWorkspaceRef.current !== workspacePath) return;
+    storage.set(agentSessionsKey(workspacePath), sessions).catch(() => {});
+  }, [sessions, isLoaded, workspacePath]);
 
   useEffect(() => {
-    if (!isLoaded) return;
-    storage.set(SESSIONS_KEY, sessions).catch(() => {});
-  }, [sessions, isLoaded]);
-
-  useEffect(() => {
-    if (!isLoaded) return;
-    storage.set(FOLDERS_KEY, folders).catch(() => {});
-  }, [folders, isLoaded]);
+    if (!isLoaded || !workspacePath) return;
+    if (loadedWorkspaceRef.current !== workspacePath) return;
+    storage.set(agentFoldersKey(workspacePath), folders).catch(() => {});
+  }, [folders, isLoaded, workspacePath]);
 
   const getAgent = useCallback((id: string) => agents.find(a => a.id === id), [agents]);
 
