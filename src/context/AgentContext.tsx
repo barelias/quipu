@@ -52,7 +52,23 @@ interface AgentContextValue {
   sendMessage: (agentId: string, body: string, attachments?: AgentImageAttachment[]) => Promise<void>;
   cancelTurn: (agentId: string) => Promise<void>;
   isTurnActive: (agentId: string) => boolean;
-  respondToPermission: (agentId: string, messageId: string, decision: 'allow' | 'deny') => void;
+  /**
+   * Respond to a pending permission request. The optional `opts` plumbs through
+   * to the runtime's `respondToPermission` helper:
+   *   - `decision: 'allow'` with `opts.updatedInput` becomes
+   *     `{ behavior: 'allow', updatedInput }` on the wire.
+   *   - `decision: 'deny'` with `opts.message` becomes
+   *     `{ behavior: 'deny', message }` — used by the AskUserQuestion flow to
+   *     surface the user's chosen answer to the agent as the "denial reason"
+   *     so the tool stops re-asking and the agent reads the answer in its
+   *     next turn.
+   */
+  respondToPermission: (
+    agentId: string,
+    messageId: string,
+    decision: 'allow' | 'deny',
+    opts?: { message?: string; updatedInput?: Record<string, unknown> },
+  ) => void;
   /** Eagerly start (or resume) the Claude subprocess for the given agent so a
    *  reopened chat tab is ready before the user types. Idempotent — bails out
    *  if a session handle already exists; surfaces spawn errors as an
@@ -920,7 +936,12 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     draftsRef.current.set(agentId, next);
   }, []);
 
-  const respondToPermission = useCallback((agentId: string, messageId: string, decision: 'allow' | 'deny') => {
+  const respondToPermission = useCallback((
+    agentId: string,
+    messageId: string,
+    decision: 'allow' | 'deny',
+    opts?: { message?: string; updatedInput?: Record<string, unknown> },
+  ) => {
     const session = sessionsRef.current[agentId];
     const message = session?.messages.find(m => m.id === messageId);
     const req = message?.permissionRequest;
@@ -931,7 +952,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       showToast('No active session — restart the agent and try again.', 'warning');
       return;
     }
-    handle.respondToPermission(req.toolUseId, decision);
+    handle.respondToPermission(req.toolUseId, decision, opts);
     updateMessage(agentId, messageId, {
       permissionRequest: { ...req, status: decision === 'allow' ? 'allowed' : 'denied', decidedAt: new Date().toISOString() },
     });
