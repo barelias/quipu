@@ -148,6 +148,28 @@ function rewritePluginSource(source) {
     return patched;
 }
 
+// Content-Type lookup for plugin assets. FontFace and stylesheet loaders
+// reject responses with the wrong (or missing) MIME, even when the bytes are
+// fine — Chrome's font sniff is lenient but not bulletproof. Map the common
+// types we ship from plugins explicitly; everything else falls through to
+// `application/octet-stream` and the fetch caller handles it.
+const PLUGIN_ASSET_MIME = {
+    '.woff2': 'font/woff2',
+    '.woff': 'font/woff',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.wasm': 'application/wasm',
+    '.map': 'application/json; charset=utf-8',
+};
+
 const HIDDEN_DIRS = new Set(['.git']);
 
 // Plugin management paths
@@ -453,7 +475,18 @@ app.whenReady().then(() => {
                     headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
                 });
             }
-            return net.fetch('file://' + resolved);
+            // Read binary assets with fs and set a proper Content-Type. Going
+            // through `net.fetch('file://')` left fonts and CSS without a MIME
+            // (or with an octet-stream fallback) and the FontFace API would
+            // silently reject the response, leaving text elements unrendered.
+            const contentType = PLUGIN_ASSET_MIME[ext] || 'application/octet-stream';
+            const buffer = await fs.promises.readFile(resolved);
+            return new Response(buffer, {
+                headers: {
+                    'Content-Type': contentType,
+                    'Cache-Control': 'public, max-age=3600',
+                },
+            });
         } catch (err) {
             if (err.code === 'ENOENT') return new Response('not found', { status: 404 });
             return new Response(`error: ${err.message || err}`, { status: 500 });
