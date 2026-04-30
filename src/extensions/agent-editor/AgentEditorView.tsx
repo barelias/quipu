@@ -7,6 +7,7 @@ import { useAgent } from '../../context/AgentContext';
 import { useRepo } from '../../context/RepoContext';
 import { Section, Field } from './EditorLayout';
 import WorkspaceTreePicker from './WorkspaceTreePicker';
+import { slugify } from '../../services/slug';
 
 import { AGENT_MODELS, DEFAULT_AGENT_MODEL } from '../../services/agentModels';
 
@@ -79,8 +80,14 @@ export default function AgentEditorView({ tab }: AgentEditorViewProps) {
       .split(/[,\n]/)
       .map(s => s.trim())
       .filter(s => s.length > 0);
+    // Reuse the existing agent's slug when editing in place; otherwise
+    // derive one from the (now-final) name. AgentContext will run a
+    // disambiguator before saving, so collisions in the same folder are
+    // handled there rather than here.
+    const slug = existing?.slug ?? slugify(trimmedName, existing?.kind ?? 'agent');
     const agent: Agent = {
       id: agentId,
+      slug,
       name: trimmedName,
       kind: existing?.kind ?? 'agent',
       systemPrompt,

@@ -18,13 +18,14 @@ export interface Agent {
   name: string;
   /**
    * Filesystem slug used to derive the on-disk filename for this agent
-   * (e.g. `frame-responder` -> `frame-responder.json`). Optional during
-   * the file-store transition (Units 1-5): the file store always populates
-   * it on load, but legacy in-memory callsites may construct an Agent
-   * without one. Unit 6 promotes this to required and folds it into
-   * the canonical id.
+   * (e.g. `frame-responder` -> `frame-responder.json`). Required as of
+   * Unit 6: AgentContext computes the canonical id from `folder + '/' + slug`
+   * and routes saves through `agentFileStore`, which uses this directly
+   * for the on-disk filename. Mutators auto-derive a slug from the
+   * agent's name when one isn't explicitly supplied — no callsite should
+   * need to slugify by hand.
    */
-  slug?: string;
+  slug: string;
   /** 'agent' = full configuration, opens editor on create. 'chat' = lightweight, opens chat directly. */
   kind: AgentKind;
   systemPrompt: string;

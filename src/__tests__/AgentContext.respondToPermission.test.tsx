@@ -1,25 +1,42 @@
+/**
+ * respondToPermission tests — the public API didn't change. The persisted
+ * pending request now arrives via `sessionCache.loadSession` (instead of
+ * the old workspace-scoped storage key).
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React, { useState } from 'react';
 import { render, act, waitFor } from '@testing-library/react';
-import type { AgentMessage, AgentPermissionRequest } from '@/types/agent';
+import type { Agent, AgentMessage, AgentPermissionRequest, AgentSession } from '@/types/agent';
 
-// Reuse the storage fake pattern from the other AgentContext tests.
-vi.mock('../services/storageService', () => {
-  const store = new Map<string, unknown>();
-  const fake = {
-    get: vi.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
-    set: vi.fn(async (key: string, value: unknown) => {
-      if (value === null || value === undefined) store.delete(key);
-      else store.set(key, value);
-    }),
-    __store: store,
-    __reset: () => { store.clear(); },
-  };
-  return { default: fake, isElectronRuntime: () => false };
-});
+const hoisted = vi.hoisted(() => ({
+  agentFileStore: {
+    loadAllAgents: vi.fn(),
+    loadAllFolders: vi.fn(),
+    saveAgent: vi.fn(),
+    deleteAgent: vi.fn(),
+    renameFolder: vi.fn(),
+    deleteFolder: vi.fn(),
+    createFolder: vi.fn(),
+  },
+  sessionCache: {
+    loadSession: vi.fn(),
+    saveSession: vi.fn(),
+    deleteSession: vi.fn(),
+    renameSession: vi.fn(),
+    workspaceHash: vi.fn(),
+  },
+}));
+const mockAgentFileStore = hoisted.agentFileStore;
+const mockSessionCache = hoisted.sessionCache;
+
+vi.mock('../services/agentFileStore', () => hoisted.agentFileStore);
+vi.mock('../services/sessionCache', () => hoisted.sessionCache);
+vi.mock('../services/quipuFileStore', () => ({
+  watchDirRecursive: () => () => {},
+}));
 
 let currentWorkspacePath: string | null = '/foo';
-
 vi.mock('../context/FileSystemContext', () => ({
   useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
 }));
@@ -40,8 +57,6 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ showToast }),
 }));
 
-// Stub the agentRuntime module: pretend Electron is available, and have
-// startSession return a handle whose respondToPermission we can spy on.
 const respondToPermissionSpy = vi.fn();
 const startSessionSpy = vi.fn(async () => ({
   sessionKey: 'sk-1',
@@ -54,16 +69,7 @@ vi.mock('../services/agentRuntime', () => ({
   startSession: () => startSessionSpy(),
 }));
 
-import storageService from '../services/storageService';
-import { migrationFlagKey, agentSessionsKey } from '../services/workspaceKeys';
 import { AgentProvider, useAgent } from '../context/AgentContext';
-
-const fakeStorage = storageService as unknown as {
-  get: ReturnType<typeof vi.fn>;
-  set: ReturnType<typeof vi.fn>;
-  __store: Map<string, unknown>;
-  __reset: () => void;
-};
 
 interface ApiHandle {
   respondToPermission: ReturnType<typeof useAgent>['respondToPermission'];
@@ -95,11 +101,9 @@ const AGENT_ID = 'agent-1';
 const MESSAGE_ID = 'msg-1';
 
 function seedAgentAndPendingRequest() {
-  // Pre-seed agents storage so the AgentProvider load resolves with this
-  // agent already in memory; pre-seed sessions with a pending permission
-  // request keyed to MESSAGE_ID.
-  fakeStorage.__store.set(`agents:/foo`, [{
+  const agent: Agent = {
     id: AGENT_ID,
+    slug: AGENT_ID,
     name: 'Test agent',
     kind: 'agent',
     systemPrompt: '',
@@ -108,7 +112,9 @@ function seedAgentAndPendingRequest() {
     permissionMode: 'default',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
-  }]);
+  };
+  mockAgentFileStore.loadAllAgents.mockResolvedValue([agent]);
+
   const pendingReq: AgentPermissionRequest = {
     toolUseId: 'tu-1',
     toolName: 'AskUserQuestion',
@@ -123,12 +129,13 @@ function seedAgentAndPendingRequest() {
     createdAt: '2026-01-01T00:00:00Z',
     permissionRequest: pendingReq,
   };
-  fakeStorage.__store.set(agentSessionsKey('/foo'), {
-    [AGENT_ID]: {
+  mockSessionCache.loadSession.mockImplementation(async (_w: string, id: string) => {
+    if (id !== AGENT_ID) return null;
+    return {
       agentId: AGENT_ID,
       messages: [msg],
       updatedAt: '2026-01-01T00:00:00Z',
-    },
+    };
   });
 }
 
@@ -141,6 +148,12 @@ async function renderAndWaitLoaded() {
   await waitFor(() => {
     expect(renderResult.getByTestId('isLoaded').textContent).toBe('true');
   });
+  // Flush any remaining post-render effects (in particular the
+  // `sessionsRef.current = sessions` sync effect — without this, the
+  // ref could lag a microtask behind the rendered state on the
+  // `isLoaded=true` commit, intermittently causing
+  // respondToPermission to read a stale empty sessions ref).
+  await act(async () => { await Promise.resolve(); });
   // Warm up the Claude session handle so respondToPermission can forward.
   await act(async () => {
     await api!.resumeSession(AGENT_ID);
@@ -149,15 +162,17 @@ async function renderAndWaitLoaded() {
 }
 
 beforeEach(() => {
-  fakeStorage.__reset();
-  fakeStorage.get.mockClear();
-  fakeStorage.set.mockClear();
+  for (const m of Object.values(mockAgentFileStore)) m.mockReset();
+  for (const m of Object.values(mockSessionCache)) m.mockReset();
+  mockAgentFileStore.loadAllAgents.mockResolvedValue([]);
+  mockAgentFileStore.loadAllFolders.mockResolvedValue([]);
+  mockAgentFileStore.saveAgent.mockResolvedValue('');
+  mockSessionCache.loadSession.mockResolvedValue(null);
   respondToPermissionSpy.mockClear();
   startSessionSpy.mockClear();
   showToast.mockClear();
   currentWorkspacePath = '/foo';
   api = null;
-  fakeStorage.__store.set(migrationFlagKey(), true);
 });
 
 describe('AgentContext.respondToPermission — extended opts', () => {
@@ -203,13 +218,11 @@ describe('AgentContext.respondToPermission — extended opts', () => {
     seedAgentAndPendingRequest();
     await renderAndWaitLoaded();
 
-    // First click flips status to 'denied'.
     await act(async () => {
       api!.respondToPermission(AGENT_ID, MESSAGE_ID, 'deny', { message: 'x' });
     });
     expect(respondToPermissionSpy).toHaveBeenCalledTimes(1);
 
-    // Second click on the same already-decided request is a no-op.
     await act(async () => {
       api!.respondToPermission(AGENT_ID, MESSAGE_ID, 'deny', { message: 'y' });
     });
