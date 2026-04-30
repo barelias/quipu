@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { CloudIcon, CloudCheckIcon, CircleNotchIcon, WarningIcon } from '@phosphor-icons/react';
+import { CloudIcon, CloudCheckIcon, WarningIcon } from '@phosphor-icons/react';
 import { useKamalu } from '../../context/KamaluContext';
 import KamaluConnectDialog from './KamaluConnectDialog';
+import { ScribeGlyphs, MayanLoader } from './ScribeGlyphs';
 import { cn } from '../../lib/utils';
 
 export default function StatusBar() {
@@ -16,7 +17,7 @@ export default function StatusBar() {
   })();
 
   const icon = (() => {
-    if (status === 'connecting') return <CircleNotchIcon size={12} className="animate-spin shrink-0" />;
+    if (status === 'connecting') return <MayanLoader />;
     if (status === 'connected') return <CloudCheckIcon size={12} className="shrink-0" />;
     if (status === 'error') return <WarningIcon size={12} className="shrink-0" />;
     return <CloudIcon size={12} className="shrink-0" />;
@@ -45,6 +46,12 @@ export default function StatusBar() {
           {icon}
           <span className="leading-none">{label}</span>
         </button>
+
+        {/* Scribe glyphs — right-aligned ambient ornament that ticks on
+            every input or selection change. Decorative; not interactive. */}
+        <div className="ml-auto flex items-center h-full px-3 text-[var(--color-activity-bar-text)]">
+          <ScribeGlyphs />
+        </div>
       </div>
 
       <KamaluConnectDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
