@@ -16,6 +16,15 @@ export type AgentKind = 'agent' | 'chat';
 export interface Agent {
   id: string;
   name: string;
+  /**
+   * Filesystem slug used to derive the on-disk filename for this agent
+   * (e.g. `frame-responder` -> `frame-responder.json`). Optional during
+   * the file-store transition (Units 1-5): the file store always populates
+   * it on load, but legacy in-memory callsites may construct an Agent
+   * without one. Unit 6 promotes this to required and folds it into
+   * the canonical id.
+   */
+  slug?: string;
   /** 'agent' = full configuration, opens editor on create. 'chat' = lightweight, opens chat directly. */
   kind: AgentKind;
   systemPrompt: string;
