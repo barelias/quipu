@@ -112,6 +112,14 @@ export interface AgentSession {
 export interface Repo {
   id: string;
   name: string;
+  /**
+   * Filesystem slug used to derive the on-disk filename for this repo
+   * (e.g. `quipu` -> `quipu.json`). Optional during the file-store
+   * transition (Units 1-6): the file store always populates it on load,
+   * but legacy in-memory callsites may construct a Repo without one.
+   * Unit 7 promotes this to required and folds it into the canonical id.
+   */
+  slug?: string;
   url: string;
   folder?: string;
   localClonePath?: string;
