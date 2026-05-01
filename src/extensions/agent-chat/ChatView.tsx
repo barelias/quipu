@@ -120,6 +120,7 @@ import SlashPopover, { filterSlashCommands, type SlashCommand } from './SlashPop
 import { useClaudeCommands } from './useClaudeCommands';
 import ModelPicker from './ModelPicker';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface ChatViewProps {
   tab: Tab;
@@ -833,29 +834,42 @@ export function AskQuestionBody({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {questions.map((q, i) => (
-        <div key={i} className="bg-bg-surface rounded-lg border border-border p-3">
+        <div
+          key={i}
+          // Inset card — slightly lighter parchment than the outer container.
+          className="bg-[#FAF6EC] dark:bg-[#2F2C1E] rounded-2xl border border-[#D7D5B8] dark:border-[#4A4733] px-4 py-3.5"
+        >
           {q.header && (
-            <div className="text-[9px] font-semibold uppercase tracking-wider text-text-tertiary mb-1">{q.header}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8A7F4F] dark:text-[#B8AC78] mb-1.5">
+              {q.header}
+            </div>
           )}
-          <div className="text-sm text-text-primary mb-2">{q.question}</div>
+          <div className="text-[13px] leading-snug text-[#3D3A28] dark:text-[#E8DFC0] mb-3">
+            {q.question}
+          </div>
           {q.options && q.options.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {q.options.map((opt, j) => {
                 const isSelected = selected.get(i) === opt.label;
                 return (
-                  <Button
+                  <button
                     key={j}
                     type="button"
-                    size="sm"
-                    variant={isSelected ? 'default' : 'outline'}
                     disabled={disabled}
                     onClick={() => pickOption(i, opt.label)}
                     title={opt.description ?? undefined}
+                    className={cn(
+                      'px-4 py-1.5 text-[12px] font-medium rounded-full transition-all',
+                      'disabled:opacity-50 disabled:cursor-not-allowed',
+                      isSelected
+                        ? 'bg-[#8FA15A] text-white shadow-sm hover:bg-[#7A8A4A] dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]'
+                        : 'bg-white/60 dark:bg-[#3A3622]/60 border border-[#C8C7A8] dark:border-[#5C5A3F] text-[#4A4630] dark:text-[#D4CBA8] hover:bg-[#F0E9D6] hover:border-[#8FA15A] dark:hover:bg-[#42402B] dark:hover:border-[#9CA876]'
+                    )}
                   >
                     {opt.label}
-                  </Button>
+                  </button>
                 );
               })}
             </div>
@@ -864,15 +878,19 @@ export function AskQuestionBody({
       ))}
       {!isSingle && questions.some(q => q.options && q.options.length > 0) && (
         <div className="flex">
-          <Button
+          <button
             type="button"
-            size="sm"
-            variant="default"
             disabled={disabled || !allAnswered}
             onClick={() => submit()}
+            className={cn(
+              'px-5 py-2 text-[12px] font-medium rounded-full transition-all',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+              'bg-[#8FA15A] text-white shadow-sm hover:bg-[#7A8A4A]',
+              'dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]'
+            )}
           >
             Send answers
-          </Button>
+          </button>
         </div>
       )}
     </div>
@@ -936,12 +954,27 @@ export function PermissionRequestItem({
 
   return (
     <li className={`${isFirst ? '' : 'mt-6'}`}>
-      <div className="rounded-xl border border-warning/50 bg-warning/10 px-4 py-3">
-        <div className="flex items-center gap-2 mb-2">
-          <HeaderIcon size={14} className="text-warning shrink-0" weight="fill" />
-          <span className="text-xs font-semibold text-warning uppercase tracking-wider">{headerLabel}</span>
+      {/*
+        Permission card — parchment palette inspired by the project's
+        knowledge-base-as-paper framing. Cream background, sage olive
+        accents for the header, and pill-shaped action buttons. Works
+        in both light and dark mode via parallel arbitrary-value
+        utilities (no theme tokens for these colors yet — they're
+        deliberately scoped to this surface).
+      */}
+      <div className="rounded-2xl border border-[#C8C7A8] dark:border-[#5C5A3F] bg-[#F5EFE3] dark:bg-[#26241A] px-5 py-4 shadow-[0_1px_2px_rgba(60,55,30,0.06),0_4px_12px_rgba(60,55,30,0.04)]">
+        <div className="flex items-center gap-2 mb-3">
+          <HeaderIcon size={14} className="text-[#7A8A4A] dark:text-[#9CA876] shrink-0" weight="fill" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7A8A4A] dark:text-[#9CA876]">
+            {headerLabel}
+          </span>
           {statusLabel && (
-            <span className={`text-[11px] px-2 py-0.5 rounded ${statusClass}`}>
+            <span
+              className={cn(
+                'text-[10px] font-medium px-2 py-0.5 rounded-full uppercase tracking-wider',
+                statusClass,
+              )}
+            >
               {statusLabel}
             </span>
           )}
@@ -957,35 +990,47 @@ export function PermissionRequestItem({
           )
           : (
             <>
-              <div className="text-sm break-words mb-2">
+              <div className="text-[13px] break-words mb-2 text-[#3D3A28] dark:text-[#E8DFC0]">
                 <span className="font-semibold">{req.action}</span>
                 {req.path && (
                   <FilePathLink
                     display={req.path}
                     absolutePath={resolveAgentFilePath(openableFilePath(req.input) ?? '', agent, workspacePath, repos)}
-                    className="ml-2 font-mono text-text-secondary"
+                    className="ml-2 font-mono text-[#7A6F4A] dark:text-[#B8AC78]"
                   />
                 )}
-                {req.detail && <span className="ml-2 font-mono text-text-secondary">{req.detail}</span>}
+                {req.detail && <span className="ml-2 font-mono text-[#7A6F4A] dark:text-[#B8AC78]">{req.detail}</span>}
               </div>
               <ToolDetail action={req.action} input={req.input} />
             </>
           )}
 
         {pending && (
-          <div className="flex items-center gap-2 mt-3">
+          <div className="flex items-center gap-2 mt-4">
             <button
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-success text-white hover:opacity-90 transition-opacity"
+              type="button"
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-full transition-all shadow-sm',
+                'bg-[#8FA15A] text-white hover:bg-[#7A8A4A]',
+                'dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]',
+              )}
               onClick={() => onRespondPermission('allow')}
             >
-              <CheckIcon size={12} weight="bold" />
+              <CheckIcon size={11} weight="bold" />
               {isQuestion ? 'Let agent answer' : 'Allow once'}
             </button>
             <button
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-border text-text-secondary hover:text-error hover:border-error transition-colors"
+              type="button"
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-full transition-all',
+                'bg-white/60 dark:bg-[#3A3622]/60 border border-[#C8C7A8] dark:border-[#5C5A3F]',
+                'text-[#6B6243] dark:text-[#B8AC78]',
+                'hover:bg-[#F0E9D6] hover:border-[#A8957A] hover:text-[#8B5A3C]',
+                'dark:hover:bg-[#42402B] dark:hover:border-[#7A6F4A]',
+              )}
               onClick={() => onRespondPermission('deny')}
             >
-              <XIcon size={12} weight="bold" />
+              <XIcon size={11} weight="bold" />
               {isQuestion ? 'Cancel' : 'Deny'}
             </button>
           </div>
