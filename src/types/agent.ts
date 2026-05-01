@@ -115,12 +115,13 @@ export interface Repo {
   name: string;
   /**
    * Filesystem slug used to derive the on-disk filename for this repo
-   * (e.g. `quipu` -> `quipu.json`). Optional during the file-store
-   * transition (Units 1-6): the file store always populates it on load,
-   * but legacy in-memory callsites may construct a Repo without one.
-   * Unit 7 promotes this to required and folds it into the canonical id.
+   * (e.g. `quipu` -> `quipu.json`). Required as of Unit 7: RepoContext
+   * computes the canonical id from `folder + '/' + slug` and routes saves
+   * through `repoFileStore`, which uses this directly for the on-disk
+   * filename. Mutators auto-derive a slug from the repo's name when one
+   * isn't explicitly supplied — no callsite should need to slugify by hand.
    */
-  slug?: string;
+  slug: string;
   url: string;
   folder?: string;
   localClonePath?: string;

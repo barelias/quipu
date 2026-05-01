@@ -1,101 +1,117 @@
+/**
+ * Tests for the file-store wiring inside `RepoContext`.
+ *
+ * Strategy: mock `repoFileStore` and `quipuFileStore` directly. Those
+ * services have their own unit tests covering disk behavior; here we only
+ * verify the context's call shape, state lifecycle, and watcher
+ * integration. Mirrors the AgentContext test approach.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React, { useState } from 'react';
 import { render, act, waitFor } from '@testing-library/react';
+import type { Repo } from '@/types/agent';
 
-// In-memory storage fake. Defined inside vi.mock's factory so hoisting works,
-// then re-imported below for inspection. Mirrors the pattern in
-// AgentContext.test.tsx and workspaceKeysMigration.test.ts.
-vi.mock('../services/storageService', () => {
-  const store = new Map<string, unknown>();
-  const fake = {
-    get: vi.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
-    set: vi.fn(async (key: string, value: unknown) => {
-      if (value === null || value === undefined) {
-        store.delete(key);
-      } else {
-        store.set(key, value);
-      }
-    }),
-    __store: store,
-    __reset: () => { store.clear(); },
-  };
-  return { default: fake, isElectronRuntime: () => false };
-});
+// === Mocks for service modules ===========================================
+//
+// `vi.mock` factories are hoisted above any non-import statement, so any
+// state they reference must come from `vi.hoisted` — that runs before
+// the mocks but after vitest is initialized.
 
-// Mock the file system service. RepoProvider only touches it inside
-// `cloneRepoForAgent`/`deleteRepo`/`deleteFolder`. The tests for
-// load/save/clear behavior do not exercise those code paths directly, but
-// `deleteFolder` does call `fs.deletePath` when `removeClones` is set.
-vi.mock('../services/fileSystem', () => {
-  return {
-    default: {
-      deletePath: vi.fn(async () => ({ success: true })),
-      readFile: vi.fn(async () => ''),
-      writeFile: vi.fn(async () => ({ success: true })),
-      readDirectory: vi.fn(async () => []),
-    },
-  };
-});
+const hoisted = vi.hoisted(() => ({
+  repoFileStore: {
+    loadAllRepos: vi.fn(),
+    loadAllFolders: vi.fn(),
+    saveRepo: vi.fn(),
+    deleteRepo: vi.fn(),
+    deleteFolder: vi.fn(),
+    renameFolder: vi.fn(),
+    createFolder: vi.fn(),
+  },
+  fileSystem: {
+    deletePath: vi.fn(),
+    readFile: vi.fn(),
+    writeFile: vi.fn(),
+    readDirectory: vi.fn(),
+    createFolder: vi.fn(),
+    renamePath: vi.fn(),
+    onDirectoryChanged: vi.fn(),
+    watchDirectory: vi.fn(),
+  },
+  watchers: [] as Array<{
+    absDir: string;
+    onChange: (event: { type: 'change' | 'rename'; path?: string }) => void;
+    unsubscribed: boolean;
+  }>,
+}));
+const mockRepoFileStore = hoisted.repoFileStore;
+const mockFs = hoisted.fileSystem;
 
-// Mock the FileSystemContext. RepoProvider only needs `workspacePath`. We
-// expose mutable state on the module so individual tests can flip
-// workspacePath at runtime via React state without remounting the provider.
+vi.mock('../services/repoFileStore', () => hoisted.repoFileStore);
+
+vi.mock('../services/fileSystem', () => ({
+  default: hoisted.fileSystem,
+}));
+
+vi.mock('../services/quipuFileStore', () => ({
+  watchDirRecursive: (
+    absDir: string,
+    onChange: (event: { type: 'change' | 'rename'; path?: string }) => void,
+  ): (() => void) => {
+    const entry = { absDir, onChange, unsubscribed: false };
+    hoisted.watchers.push(entry);
+    return () => { entry.unsubscribed = true; };
+  },
+}));
+
 let currentWorkspacePath: string | null = null;
+vi.mock('../context/FileSystemContext', () => ({
+  useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
+}));
 
-vi.mock('../context/FileSystemContext', () => {
-  return {
-    useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
-  };
-});
+vi.mock('../components/ui/Toast', () => ({
+  useToast: () => ({ showToast: vi.fn() }),
+}));
 
-import storageService from '../services/storageService';
-import fsService from '../services/fileSystem';
-import { reposKey, migrationFlagKey, GLOBAL_REPOS_KEY } from '../services/workspaceKeys';
 import { RepoProvider, useRepo } from '../context/RepoContext';
-import type { Repo } from '../types/agent';
 
-const fakeStorage = storageService as unknown as {
-  get: ReturnType<typeof vi.fn>;
-  set: ReturnType<typeof vi.fn>;
-  __store: Map<string, unknown>;
-  __reset: () => void;
-};
+// === Test harness =========================================================
 
-const fakeFs = fsService as unknown as {
-  deletePath: ReturnType<typeof vi.fn>;
-};
-
-function makeRepo(id: string, overrides: Partial<Repo> = {}): Repo {
+function makeRepo(overrides: Partial<Repo> & Pick<Repo, 'id' | 'slug' | 'name'>): Repo {
+  const now = '2026-04-30T10:00:00Z';
   return {
-    id,
-    name: id,
-    url: `https://example.com/${id}.git`,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    ...overrides,
+    id: overrides.id,
+    slug: overrides.slug,
+    name: overrides.name,
+    url: overrides.url ?? `https://example.com/${overrides.slug}.git`,
+    folder: overrides.folder,
+    localClonePath: overrides.localClonePath,
+    createdAt: overrides.createdAt ?? now,
+    updatedAt: overrides.updatedAt ?? now,
   };
 }
 
-// Test harness component: drives `currentWorkspacePath` via React state and
-// re-renders the provider whenever it changes, simulating a real
-// FileSystemContext value flip.
-function Harness({ initialPath, onReady, children }: {
-  initialPath: string | null;
-  onReady?: (api: { setPath: (p: string | null) => void }) => void;
-  children: React.ReactNode;
-}) {
-  const [path, setPath] = useState<string | null>(initialPath);
-  // Sync the module-level mock state every render so useFileSystem() returns
-  // the latest path during this render pass.
-  currentWorkspacePath = path;
-  React.useEffect(() => { onReady?.({ setPath }); }, [onReady]);
-  return <RepoProvider>{children}</RepoProvider>;
+interface ActionsApi {
+  upsertRepo: (repo: Repo) => void;
+  deleteRepo: (id: string, options?: { removeClone?: boolean }) => Promise<void>;
+  deleteFolder: (folder: string, options?: { removeClones?: boolean }) => Promise<void>;
+  cloneRepoForAgent: (repoId: string, agentId: string) => Promise<string>;
+  getCloneStatus: (id: string) => string;
 }
 
-/** Renders the current RepoContext state into the DOM so tests can poll it
- *  via standard testing-library assertions. */
+let actionsApi: ActionsApi | null = null;
+
 function StateProbe() {
   const ctx = useRepo();
+  React.useEffect(() => {
+    actionsApi = {
+      upsertRepo: ctx.upsertRepo,
+      deleteRepo: ctx.deleteRepo,
+      deleteFolder: ctx.deleteFolder,
+      cloneRepoForAgent: ctx.cloneRepoForAgent,
+      getCloneStatus: (id) => ctx.getCloneStatus(id).state,
+    };
+  });
   return (
     <div>
       <div data-testid="isLoaded">{String(ctx.isLoaded)}</div>
@@ -105,58 +121,53 @@ function StateProbe() {
   );
 }
 
-interface ActionsApi {
-  upsertRepo: (id: string, overrides?: Partial<Repo>) => void;
-  deleteFolder: (folder: string, options?: { removeClones?: boolean }) => Promise<void>;
-  setCloneState: (id: string) => void;
-  getCloneStateLabel: (id: string) => string;
-}
-
-let actionsApi: ActionsApi | null = null;
-
-function ActionsProbe() {
-  const ctx = useRepo();
-  React.useEffect(() => {
-    actionsApi = {
-      upsertRepo: (id, overrides) => ctx.upsertRepo(makeRepo(id, overrides)),
-      deleteFolder: (folder, options) => ctx.deleteFolder(folder, options),
-      setCloneState: (_id) => {/* exposed indirectly via the provider's clone tooling — see CloneStateProbe */},
-      getCloneStateLabel: (id) => ctx.getCloneStatus(id).state,
-    };
-  });
-  return null;
-}
-
-/**
- * Surfaces the current cloneStates map for a known repo id. We use this to
- * verify the workspace-switch reset behavior; toggling a clone state cleanly
- * from outside the provider is not part of the public API, so the test seeds
- * an in-progress clone via the same `cloneRepoForAgent` codepath an app
- * would use — except here we just probe the public `getCloneStatus`.
- */
-function CloneStateProbe({ repoId }: { repoId: string }) {
-  const ctx = useRepo();
-  return <div data-testid={`cloneState:${repoId}`}>{ctx.getCloneStatus(repoId).state}</div>;
+function Harness({ initialPath, onReady, children }: {
+  initialPath: string | null;
+  onReady?: (api: { setPath: (p: string | null) => void }) => void;
+  children: React.ReactNode;
+}) {
+  const [path, setPath] = useState<string | null>(initialPath);
+  currentWorkspacePath = path;
+  React.useEffect(() => { onReady?.({ setPath }); }, [onReady]);
+  return <RepoProvider>{children}</RepoProvider>;
 }
 
 beforeEach(() => {
-  fakeStorage.__reset();
-  fakeStorage.get.mockClear();
-  fakeStorage.set.mockClear();
-  fakeFs.deletePath.mockClear();
+  for (const m of Object.values(mockRepoFileStore)) m.mockReset();
+  for (const m of Object.values(mockFs)) m.mockReset();
+
+  // Restore default no-op implementations after reset.
+  mockRepoFileStore.loadAllRepos.mockImplementation(async () => []);
+  mockRepoFileStore.loadAllFolders.mockImplementation(async () => []);
+  mockRepoFileStore.saveRepo.mockImplementation(async (_, repo: Repo, _prev?: string) => {
+    const folder = repo.folder ?? '';
+    const slug = repo.slug ?? '';
+    return folder === '' ? slug : `${folder}/${slug}`;
+  });
+  mockRepoFileStore.deleteRepo.mockImplementation(async () => {});
+  mockRepoFileStore.deleteFolder.mockImplementation(async () => {});
+  mockRepoFileStore.renameFolder.mockImplementation(async () => {});
+  mockRepoFileStore.createFolder.mockImplementation(async () => {});
+
+  mockFs.deletePath.mockImplementation(async () => ({ success: true }));
+  mockFs.readFile.mockImplementation(async () => '');
+  mockFs.writeFile.mockImplementation(async () => ({ success: true }));
+  mockFs.readDirectory.mockImplementation(async () => []);
+  mockFs.createFolder.mockImplementation(async () => ({ success: true }));
+  mockFs.renamePath.mockImplementation(async () => ({ success: true }));
+  mockFs.onDirectoryChanged.mockImplementation(() => () => {});
+  mockFs.watchDirectory.mockImplementation(async () => null);
+
+  hoisted.watchers.length = 0;
   currentWorkspacePath = null;
   actionsApi = null;
-  // Mark migration flag set by default so most tests exercise the load path
-  // without involving the migration step. Tests that want migration
-  // explicitly clear the flag in setup.
-  fakeStorage.__store.set(migrationFlagKey(), true);
 });
 
-describe('RepoProvider workspace-scoped storage', () => {
-  it('happy path: mounts with workspacePath=/foo and populates repos from scoped key', async () => {
-    fakeStorage.__store.set(reposKey('/foo'), [
-      makeRepo('r1', { name: 'Repo One' }),
-      makeRepo('r2', { name: 'Repo Two', folder: 'shared' }),
+describe('RepoProvider — file-store load lifecycle', () => {
+  it('happy path: mounts with workspacePath=/foo and populates state from repoFileStore', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({ id: 'quipu', slug: 'quipu', name: 'Quipu' }),
+      makeRepo({ id: 'external/upstream', slug: 'upstream', folder: 'external', name: 'Upstream' }),
     ]);
 
     const { getByTestId } = render(
@@ -165,33 +176,31 @@ describe('RepoProvider workspace-scoped storage', () => {
       </Harness>,
     );
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-    });
-    expect(getByTestId('repoIds').textContent).toBe('r1,r2');
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(getByTestId('repoIds').textContent).toBe('external/upstream,quipu');
+    expect(mockRepoFileStore.loadAllRepos).toHaveBeenCalledWith('/foo');
   });
 
-  it('mounts with workspacePath=null → state stays empty, isLoaded false, no scoped reads', async () => {
+  it('mounts with workspacePath=null → state stays empty, no file-store calls', async () => {
     const { getByTestId } = render(
       <Harness initialPath={null}>
         <StateProbe />
       </Harness>,
     );
 
-    // Give effects a chance to flush.
     await act(async () => { await Promise.resolve(); });
 
     expect(getByTestId('isLoaded').textContent).toBe('false');
     expect(getByTestId('repoIds').textContent).toBe('');
-
-    // No scoped get for repos:* keys.
-    const calls = fakeStorage.get.mock.calls.map(c => c[0]);
-    expect(calls.some((k: string) => k.startsWith('repos:'))).toBe(false);
+    expect(mockRepoFileStore.loadAllRepos).not.toHaveBeenCalled();
   });
 
-  it('workspace switch /foo → /bar: repos clear, /bar scoped key loads, /foo data preserved', async () => {
-    fakeStorage.__store.set(reposKey('/foo'), [makeRepo('foo-1')]);
-    fakeStorage.__store.set(reposKey('/bar'), [makeRepo('bar-1')]);
+  it('workspace switch /foo → /bar clears state and reloads from /bar', async () => {
+    mockRepoFileStore.loadAllRepos.mockImplementation(async (workspace: string) => {
+      if (workspace === '/foo') return [makeRepo({ id: 'foo-1', slug: 'foo-1', name: 'Foo' })];
+      if (workspace === '/bar') return [makeRepo({ id: 'bar-1', slug: 'bar-1', name: 'Bar' })];
+      return [];
+    });
 
     let api: { setPath: (p: string | null) => void } | null = null;
     const { getByTestId } = render(
@@ -200,32 +209,24 @@ describe('RepoProvider workspace-scoped storage', () => {
       </Harness>,
     );
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('foo-1');
-    });
-
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('foo-1'));
     expect(api).not.toBeNull();
+
     await act(async () => { api!.setPath('/bar'); });
-
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('bar-1');
-    });
-
-    // Confirm the load-after-switch did not corrupt either workspace's
-    // storage record.
-    expect(fakeStorage.__store.get(reposKey('/foo'))).toEqual([
-      expect.objectContaining({ id: 'foo-1' }),
-    ]);
-    expect(fakeStorage.__store.get(reposKey('/bar'))).toEqual([
-      expect.objectContaining({ id: 'bar-1' }),
-    ]);
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('bar-1'));
   });
 
-  it('rapid workspace switch /foo → /bar → /foo before initial load completes: latest path wins', async () => {
-    fakeStorage.__store.set(reposKey('/foo'), [makeRepo('foo-1')]);
-    fakeStorage.__store.set(reposKey('/bar'), [makeRepo('bar-1')]);
+  it('rapid workspace switch /foo → /bar → /foo: latest path wins (cancelled flag)', async () => {
+    let resolveFoo: (v: Repo[]) => void = () => {};
+    let resolveBar: (v: Repo[]) => void = () => {};
+    const fooPromise = new Promise<Repo[]>(res => { resolveFoo = res; });
+    const barPromise = new Promise<Repo[]>(res => { resolveBar = res; });
+
+    mockRepoFileStore.loadAllRepos.mockImplementation(async (workspace: string) => {
+      if (workspace === '/foo') return fooPromise;
+      if (workspace === '/bar') return barPromise;
+      return [];
+    });
 
     let api: { setPath: (p: string | null) => void } | null = null;
     const { getByTestId } = render(
@@ -234,169 +235,245 @@ describe('RepoProvider workspace-scoped storage', () => {
       </Harness>,
     );
 
-    // Synchronously rapid-fire switches before any load resolves.
+    // Quickly hop to /bar and back to /foo BEFORE either load resolves.
     await act(async () => {
       api!.setPath('/bar');
       api!.setPath('/foo');
     });
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('foo-1');
+    // Now resolve both — only /foo's data should win.
+    await act(async () => {
+      resolveBar([makeRepo({ id: 'bar-1', slug: 'bar-1', name: 'Bar' })]);
+      resolveFoo([makeRepo({ id: 'foo-final', slug: 'foo-final', name: 'Foo final' })]);
+      await Promise.resolve();
     });
+
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(getByTestId('repoIds').textContent).toBe('foo-final');
   });
 
-  it('workspace switch clears cloneStates so a stale clone indicator does not bleed across workspaces', async () => {
-    // Seed /foo with repo r1 and a "cloning" state for it. The clone state
-    // is in-memory only — there's no public API to seed it directly, so we
-    // use the documented public surface: `cloneRepoForAgent` would set it,
-    // but exercising that path requires `window.electronAPI.gitClone`. The
-    // simpler route: reach into the provider via a probe that sets the
-    // state through `setCloneStates`. Since that's not exposed, we test the
-    // observable invariant: after a switch back to /foo, getCloneStatus
-    // returns 'idle' for any repo, even if a prior cloneRepoForAgent had
-    // been in-flight.
-    fakeStorage.__store.set(reposKey('/foo'), [makeRepo('r1')]);
-    fakeStorage.__store.set(reposKey('/bar'), [makeRepo('r2')]);
-
-    let api: { setPath: (p: string | null) => void } | null = null;
-    const { getByTestId } = render(
-      <Harness initialPath="/foo" onReady={a => { api = a; }}>
-        <StateProbe />
-        <CloneStateProbe repoId="r1" />
-      </Harness>,
-    );
-
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('r1');
-    });
-
-    // r1 is idle (no clone has been kicked off). After a switch to /bar
-    // and back, r1 must still report idle — even if it had been mid-clone,
-    // the cloneStates map is reset on switch.
-    expect(getByTestId('cloneState:r1').textContent).toBe('idle');
-
-    await act(async () => { api!.setPath('/bar'); });
-    await waitFor(() => {
-      expect(getByTestId('repoIds').textContent).toBe('r2');
-    });
-
-    // /bar doesn't have r1 in its repos at all — getCloneStatus returns idle.
-    expect(getByTestId('cloneState:r1').textContent).toBe('idle');
-
-    await act(async () => { api!.setPath('/foo'); });
-    await waitFor(() => {
-      expect(getByTestId('repoIds').textContent).toBe('r1');
-    });
-
-    // After switching back to /foo, r1's clone state remains 'idle' — the
-    // map was cleared on each switch and no new clone has been started.
-    expect(getByTestId('cloneState:r1').textContent).toBe('idle');
-  });
-
-  it('deleteFolder only deletes repos under the current workspace; localClonePath deletions hit the right disk paths', async () => {
-    // /foo has two repos in folder "team-a" and one in folder "other".
-    // /bar has a repo also in folder "team-a" — should NOT be touched by
-    // a deleteFolder call while the active workspace is /foo.
-    fakeStorage.__store.set(reposKey('/foo'), [
-      makeRepo('foo-team-1', { folder: 'team-a', localClonePath: '/foo/tmp/agent/repos/foo-team-1' }),
-      makeRepo('foo-team-2', { folder: 'team-a', localClonePath: '/foo/tmp/agent/repos/foo-team-2' }),
-      makeRepo('foo-other', { folder: 'other', localClonePath: '/foo/tmp/agent/repos/foo-other' }),
-    ]);
-    fakeStorage.__store.set(reposKey('/bar'), [
-      makeRepo('bar-team-1', { folder: 'team-a', localClonePath: '/bar/tmp/agent/repos/bar-team-1' }),
-    ]);
+  it('error path: loadAllRepos rejects → isLoaded still flips to true, state stays empty', async () => {
+    mockRepoFileStore.loadAllRepos.mockRejectedValueOnce(new Error('boom'));
 
     const { getByTestId } = render(
       <Harness initialPath="/foo">
         <StateProbe />
-        <ActionsProbe />
       </Harness>,
     );
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('foo-other,foo-team-1,foo-team-2');
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(getByTestId('repoIds').textContent).toBe('');
+  });
+});
+
+describe('RepoProvider — mutators dispatch to the file store', () => {
+  beforeEach(() => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValue([]);
+  });
+
+  async function mount(): Promise<ReturnType<typeof render>> {
+    const result = render(
+      <Harness initialPath="/foo">
+        <StateProbe />
+      </Harness>,
+    );
+    await waitFor(() => expect(result.getByTestId('isLoaded').textContent).toBe('true'));
+    expect(actionsApi).not.toBeNull();
+    return result;
+  }
+
+  it('upsertRepo (new) calls saveRepo with previousId=undefined and adds to state', async () => {
+    const { getByTestId } = await mount();
+    const fresh = makeRepo({ id: 'new-1', slug: 'new-1', name: 'Fresh' });
+
+    await act(async () => {
+      actionsApi!.upsertRepo(fresh);
+      await Promise.resolve();
     });
 
-    expect(actionsApi).not.toBeNull();
+    expect(mockRepoFileStore.saveRepo).toHaveBeenCalledTimes(1);
+    const [ws, repo, prev] = mockRepoFileStore.saveRepo.mock.calls[0];
+    expect(ws).toBe('/foo');
+    expect((repo as Repo).slug).toBe('new-1');
+    expect(prev).toBeUndefined();
+
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('new-1'));
+  });
+
+  it('upsertRepo (existing) passes previousId so the file store can clean up renames', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({ id: 'old-slug', slug: 'old-slug', name: 'Old' }),
+    ]);
+    const { getByTestId } = await mount();
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('old-slug'));
+
+    const updated = makeRepo({ id: 'old-slug', slug: 'old-slug', name: 'Renamed' });
+
+    await act(async () => {
+      actionsApi!.upsertRepo(updated);
+      await Promise.resolve();
+    });
+
+    expect(mockRepoFileStore.saveRepo).toHaveBeenCalledTimes(1);
+    const [, , prev] = mockRepoFileStore.saveRepo.mock.calls[0];
+    expect(prev).toBe('old-slug');
+  });
+
+  it('deleteRepo calls repoFileStore.deleteRepo and updates state', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({ id: 'gone', slug: 'gone', name: 'Gone' }),
+    ]);
+    const { getByTestId } = await mount();
+    // Confirm the seeded repo is in state (and therefore in reposRef) before
+    // we call deleteRepo — without this, the imperative ref read inside
+    // deleteRepo can race with the React state commit.
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('gone'));
+
+    await act(async () => {
+      await actionsApi!.deleteRepo('gone');
+    });
+
+    expect(mockRepoFileStore.deleteRepo).toHaveBeenCalledWith('/foo', 'gone');
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe(''));
+  });
+
+  it('deleteRepo with options.removeClone=true also deletes the clone dir on disk', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({
+        id: 'with-clone',
+        slug: 'with-clone',
+        name: 'With clone',
+        localClonePath: '/foo/tmp/agent/repos/with-clone',
+      }),
+    ]);
+    const { getByTestId } = await mount();
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('with-clone'));
+
+    await act(async () => {
+      await actionsApi!.deleteRepo('with-clone', { removeClone: true });
+    });
+
+    expect(mockRepoFileStore.deleteRepo).toHaveBeenCalledWith('/foo', 'with-clone');
+    expect(mockFs.deletePath).toHaveBeenCalledWith('/foo/tmp/agent/repos/with-clone');
+  });
+
+  it('deleteRepo without removeClone does NOT touch the disk clone path', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({
+        id: 'with-clone',
+        slug: 'with-clone',
+        name: 'With clone',
+        localClonePath: '/foo/tmp/agent/repos/with-clone',
+      }),
+    ]);
+    const { getByTestId } = await mount();
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('with-clone'));
+
+    await act(async () => {
+      await actionsApi!.deleteRepo('with-clone');
+    });
+
+    expect(mockFs.deletePath).not.toHaveBeenCalled();
+  });
+
+  it('deleteFolder calls repoFileStore.deleteFolder and reloads state', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({ id: 'team-a/r1', slug: 'r1', folder: 'team-a', name: 'R1' }),
+      makeRepo({ id: 'team-a/r2', slug: 'r2', folder: 'team-a', name: 'R2' }),
+      makeRepo({ id: 'other/r3', slug: 'r3', folder: 'other', name: 'R3' }),
+    ]);
+    const { getByTestId } = await mount();
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('other/r3,team-a/r1,team-a/r2'));
+
+    // The reload after the deleteFolder call should return the surviving repo.
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({ id: 'other/r3', slug: 'r3', folder: 'other', name: 'R3' }),
+    ]);
+
+    await act(async () => {
+      await actionsApi!.deleteFolder('team-a');
+    });
+
+    expect(mockRepoFileStore.deleteFolder).toHaveBeenCalledWith('/foo', 'team-a', { recursive: true });
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('other/r3'));
+  });
+
+  it('deleteFolder with removeClones=true also deletes each repo\'s clone dir', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({
+        id: 'team-a/r1',
+        slug: 'r1',
+        folder: 'team-a',
+        name: 'R1',
+        localClonePath: '/foo/tmp/agent/repos/r1',
+      }),
+      makeRepo({
+        id: 'team-a/r2',
+        slug: 'r2',
+        folder: 'team-a',
+        name: 'R2',
+        localClonePath: '/foo/tmp/agent/repos/r2',
+      }),
+    ]);
+    const { getByTestId } = await mount();
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('team-a/r1,team-a/r2'));
+
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([]);
+
     await act(async () => {
       await actionsApi!.deleteFolder('team-a', { removeClones: true });
     });
 
-    // /foo's repos under "team-a" are gone from in-memory state. "other"
-    // remains.
-    await waitFor(() => {
-      expect(getByTestId('repoIds').textContent).toBe('foo-other');
-    });
-
-    // localClonePath deletions hit /foo's paths — NOT /bar's path.
-    const deleted = fakeFs.deletePath.mock.calls.map(c => c[0]).sort();
-    expect(deleted).toEqual([
-      '/foo/tmp/agent/repos/foo-team-1',
-      '/foo/tmp/agent/repos/foo-team-2',
-    ]);
-    expect(deleted).not.toContain('/bar/tmp/agent/repos/bar-team-1');
-
-    // /bar's storage record is untouched by /foo's deleteFolder.
-    expect(fakeStorage.__store.get(reposKey('/bar'))).toEqual([
-      expect.objectContaining({ id: 'bar-team-1' }),
+    const deletedDirs = mockFs.deletePath.mock.calls.map(c => c[0]).sort();
+    expect(deletedDirs).toEqual([
+      '/foo/tmp/agent/repos/r1',
+      '/foo/tmp/agent/repos/r2',
     ]);
   });
+});
 
-  it('upsertRepo before isLoaded does NOT trigger a save (no empty-write to scoped key)', async () => {
-    // Slow the get for the scoped key so we can observe the pre-load state.
-    let resolveLoad: ((v: unknown) => void) | null = null;
-    fakeStorage.get.mockImplementation((key: string) => {
-      if (key === reposKey('/slow')) {
-        return new Promise(res => { resolveLoad = res; });
-      }
-      return Promise.resolve(fakeStorage.__store.has(key) ? fakeStorage.__store.get(key) : null);
-    });
+describe('RepoProvider — cloneRepoForAgent', () => {
+  beforeEach(() => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValue([
+      makeRepo({
+        id: 'quipu',
+        slug: 'quipu',
+        name: 'Quipu',
+        url: 'https://example.com/quipu.git',
+      }),
+    ]);
 
+    // Stub the Electron clone API with a window mock that records the target.
+    const electronAPI = {
+      gitClone: vi.fn(async () => ({ success: true })),
+      pathExists: vi.fn(async () => false),
+    };
+    (window as unknown as { electronAPI: typeof electronAPI }).electronAPI = electronAPI;
+  });
+
+  it('produces the right disk target path: <workspace>/tmp/<agentId>/repos/<sanitized-name>', async () => {
     const { getByTestId } = render(
-      <Harness initialPath="/slow">
+      <Harness initialPath="/foo">
         <StateProbe />
-        <ActionsProbe />
       </Harness>,
     );
-
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('false');
-    });
-
-    const setCallsBefore = fakeStorage.set.mock.calls.length;
-
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
     expect(actionsApi).not.toBeNull();
+
+    let target: string | null = null;
     await act(async () => {
-      actionsApi!.upsertRepo('pre-load');
+      target = await actionsApi!.cloneRepoForAgent('quipu', 'agent-123');
     });
 
-    // No additional saves while not isLoaded.
-    expect(fakeStorage.set.mock.calls.length).toBe(setCallsBefore);
-
-    // The scoped key was NOT written to during the pre-load window.
-    const preloadWrites = fakeStorage.set.mock.calls
-      .slice(0, setCallsBefore)
-      .filter(c => c[0] === reposKey('/slow'));
-    expect(preloadWrites).toEqual([]);
-
-    // Release the load.
-    await act(async () => {
-      resolveLoad!(null);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-    });
+    expect(target).toBe('/foo/tmp/agent-123/repos/quipu');
+    const electronAPI = (window as unknown as { electronAPI: { gitClone: ReturnType<typeof vi.fn> } }).electronAPI;
+    expect(electronAPI.gitClone).toHaveBeenCalledWith('https://example.com/quipu.git', '/foo/tmp/agent-123/repos/quipu');
   });
+});
 
-  it('migration: opening /foo for first time copies global repos into repos:/foo, opening /bar later starts empty', async () => {
-    // Clear the flag this test set in beforeEach so migration runs.
-    fakeStorage.__store.delete(migrationFlagKey());
-    fakeStorage.__store.set(GLOBAL_REPOS_KEY, [makeRepo('legacy-1', { name: 'Legacy' })]);
+describe('RepoProvider — file watcher integration', () => {
+  it('subscribes to a watcher rooted at <workspace>/.quipu and unsubscribes on workspace switch', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValue([]);
 
     let api: { setPath: (p: string | null) => void } | null = null;
     const { getByTestId } = render(
@@ -404,44 +481,93 @@ describe('RepoProvider workspace-scoped storage', () => {
         <StateProbe />
       </Harness>,
     );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(hoisted.watchers.some(w => w.absDir === '/foo/.quipu' && !w.unsubscribed)).toBe(true);
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('legacy-1');
-    });
-
-    expect(fakeStorage.__store.get(reposKey('/foo'))).toEqual([
-      expect.objectContaining({ id: 'legacy-1' }),
-    ]);
-    expect(fakeStorage.__store.has(GLOBAL_REPOS_KEY)).toBe(false);
-    expect(fakeStorage.__store.get(migrationFlagKey())).toBe(true);
-
-    // Now switch to /bar — the flag suppresses re-migration, so /bar's
-    // repos start empty.
     await act(async () => { api!.setPath('/bar'); });
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('repoIds').textContent).toBe('');
-    });
+    const fooWatcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(fooWatcher?.unsubscribed).toBe(true);
+    expect(hoisted.watchers.some(w => w.absDir === '/bar/.quipu' && !w.unsubscribed)).toBe(true);
   });
 
-  it('error path: storage.get rejects on the scoped key → isLoaded still flips to true, state stays empty', async () => {
-    fakeStorage.get.mockImplementation(async (key: string) => {
-      if (key === reposKey('/foo')) throw new Error('boom');
-      return fakeStorage.__store.has(key) ? fakeStorage.__store.get(key) : null;
-    });
+  it('watcher event under .quipu/repos/ triggers a reload', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([]);
 
     const { getByTestId } = render(
       <Harness initialPath="/foo">
         <StateProbe />
       </Harness>,
     );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
+    // Cross-window mutation: a new repo file appeared.
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([
+      makeRepo({ id: 'cross-win', slug: 'cross-win', name: 'Cross window' }),
+    ]);
+
+    const watcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(watcher).toBeDefined();
+    await act(async () => {
+      watcher!.onChange({ type: 'change', path: '/foo/.quipu/repos/cross-win.json' });
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
-    expect(getByTestId('repoIds').textContent).toBe('');
+    await waitFor(() => expect(getByTestId('repoIds').textContent).toBe('cross-win'));
+  });
+
+  it('watcher event under .quipu/agents/ does NOT trigger a repo reload', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([]);
+
+    const { getByTestId } = render(
+      <Harness initialPath="/foo">
+        <StateProbe />
+      </Harness>,
+    );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    const initialLoadCalls = mockRepoFileStore.loadAllRepos.mock.calls.length;
+
+    const watcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(watcher).toBeDefined();
+    await act(async () => {
+      watcher!.onChange({ type: 'change', path: '/foo/.quipu/agents/some-agent.json' });
+      await Promise.resolve();
+    });
+
+    // No additional reload — the agents subtree is filtered out.
+    expect(mockRepoFileStore.loadAllRepos.mock.calls.length).toBe(initialLoadCalls);
+  });
+
+  it('echo suppression: reload is NOT triggered for paths just written by this window', async () => {
+    mockRepoFileStore.loadAllRepos.mockResolvedValueOnce([]);
+
+    const { getByTestId } = render(
+      <Harness initialPath="/foo">
+        <StateProbe />
+      </Harness>,
+    );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    const initialLoadCalls = mockRepoFileStore.loadAllRepos.mock.calls.length;
+
+    // upsertRepo writes a file and registers it for echo suppression.
+    const fresh = makeRepo({ id: 'echoed', slug: 'echoed', name: 'Echoed' });
+    await act(async () => {
+      actionsApi!.upsertRepo(fresh);
+      await Promise.resolve();
+    });
+
+    // Watcher fires for the same path we just wrote — should be ignored.
+    const watcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(watcher).toBeDefined();
+    await act(async () => {
+      watcher!.onChange({ type: 'change', path: '/foo/.quipu/repos/echoed.json' });
+      await Promise.resolve();
+    });
+
+    // No additional reload past the initial mount load. (loadAllRepos
+    // count stayed at initial — the echoed event was suppressed.)
+    expect(mockRepoFileStore.loadAllRepos.mock.calls.length).toBe(initialLoadCalls);
   });
 });

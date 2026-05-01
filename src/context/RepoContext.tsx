@@ -1,12 +1,18 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import storage from '../services/storageService';
 import fs from '../services/fileSystem';
 import { useFileSystem } from './FileSystemContext';
-import { reposKey } from '../services/workspaceKeys';
-import { migrateGlobalKeysIfNeeded } from '../services/workspaceKeysMigration';
+import { useToast } from '../components/ui/Toast';
+import * as repoFileStore from '../services/repoFileStore';
+import { watchDirRecursive } from '../services/quipuFileStore';
+import { slugify, normalizeFolder, disambiguateSlug, joinId } from '../services/slug';
 import type { Repo } from '@/types/agent';
 
 const GITIGNORE_LINE = 'tmp/';
+
+/** How long a path written by THIS window suppresses a watcher reload.
+ *  Mirrors AgentContext: longer than ~300ms and we're outside the OS
+ *  buffer for coalesced inotify events. */
+const ECHO_TTL_MS = 300;
 
 export type CloneStatus =
   | { state: 'idle' }
@@ -63,112 +69,197 @@ async function ensureTmpGitignored(workspacePath: string): Promise<void> {
 
 export function RepoProvider({ children }: { children: React.ReactNode }) {
   const { workspacePath } = useFileSystem();
+  const { showToast } = useToast();
+
+  // === State (per CLAUDE.md hook ordering: state first, callbacks, effects last) ===
+
   const [repos, setRepos] = useState<Repo[]>([]);
   const [cloneStates, setCloneStates] = useState<Record<string, CloneStatus>>({});
   const [isLoaded, setIsLoaded] = useState(false);
+
   const reposRef = useRef<Repo[]>(repos);
   useEffect(() => { reposRef.current = repos; }, [repos]);
 
-  // Tracks which workspacePath the in-memory `repos` belongs to. Synchronously
-  // cleared at the top of the load effect (before the setStates that reset
-  // state) and synchronously set when a load completes — both done via this
-  // ref rather than a state value because the save effect needs a same-render
-  // barrier. Without this, the save effect would fire during the workspace
-  // transition (when its `workspacePath` dep changed but `repos` still holds
-  // the previous workspace's data), writing the previous workspace's data
-  // into the new workspace's storage key — a silent corruption of the new
-  // workspace. (Mirrors the pattern in AgentContext.)
+  // Tracks which workspacePath the in-memory state belongs to. Used by the
+  // file watcher reload to bail out if we've moved on to another workspace
+  // since the event arrived. Saves are imperative (synchronous against the
+  // call site's workspacePath capture), so they don't need this barrier.
   const loadedWorkspaceRef = useRef<string | null>(null);
 
-  // Load (and reload on workspace switch). Storage keys are scoped to the
-  // current workspace; while `workspacePath` is null we present empty state
-  // and never write, so a no-workspace window cannot accidentally clobber
-  // data. The `cancelled` flag protects against rapid workspace switches: a
-  // stale load that resolves after the user has already moved to a different
-  // workspace must not overwrite the new workspace's just-loaded state.
-  useEffect(() => {
-    let cancelled = false;
+  // Echo-suppression: when this window writes to a path, the watcher
+  // immediately fires for that path. Tracking expiry timestamps lets us
+  // ignore those self-induced events without blocking real cross-window
+  // writes for more than a few hundred milliseconds. Mirrors AgentContext.
+  const recentWriteTimesRef = useRef<Map<string, number>>(new Map());
 
-    // Synchronously invalidate the loaded-workspace barrier so the save
-    // effect that fires later in this same effect cycle (because its
-    // `workspacePath` dep just changed) bails out instead of writing the
-    // previous workspace's in-memory data into the new workspace's storage
-    // key.
-    loadedWorkspaceRef.current = null;
-
-    // Reset on every workspace change. `cloneStates` is in-memory only — a
-    // clone-in-progress that belongs to the previous workspace must not
-    // bleed into the new one. The clone may still complete on disk (the
-    // promise in cloneRepoForAgent keeps running), but the in-memory
-    // cloning indicator is gone — that's an acceptable trade since the
-    // clone target path is workspace-relative anyway.
-    setIsLoaded(false);
-    setRepos([]);
-    setCloneStates({});
-
-    if (!workspacePath) {
-      return () => { cancelled = true; };
+  /** Mark the given absolute path as "just written by us" for ECHO_TTL_MS.
+   *  Garbage-collects any expired entries on the way in. */
+  const markRecentWrite = useCallback((absPath: string): void => {
+    const now = Date.now();
+    const map = recentWriteTimesRef.current;
+    for (const [k, expiry] of map) {
+      if (expiry <= now) map.delete(k);
     }
+    map.set(absPath, now + ECHO_TTL_MS);
+  }, []);
 
-    const key = reposKey(workspacePath);
+  /** True if `absPath` is one we wrote within ECHO_TTL_MS. Consumes the entry
+   *  on hit so a single write only suppresses one watcher event. */
+  const isRecentEcho = useCallback((absPath: string): boolean => {
+    const expiry = recentWriteTimesRef.current.get(absPath);
+    if (expiry === undefined) return false;
+    if (expiry <= Date.now()) {
+      recentWriteTimesRef.current.delete(absPath);
+      return false;
+    }
+    recentWriteTimesRef.current.delete(absPath);
+    return true;
+  }, []);
 
-    (async () => {
-      try {
-        await migrateGlobalKeysIfNeeded(workspacePath);
-      } catch (err) {
-        // Migration failure must not block workspace open. The corresponding
-        // scoped key will simply be empty on first read; the user can re-key
-        // by hand if needed.
-        console.warn('[repos] migrateGlobalKeysIfNeeded failed', err);
-      }
-      if (cancelled) return;
-
-      const saved = await storage.get(key).catch(() => null);
-      if (cancelled) return;
-
-      if (Array.isArray(saved)) {
-        setRepos(saved as Repo[]);
-      }
-      // Mark this workspace as the source-of-truth BEFORE flipping isLoaded
-      // so the save effect (which fires on the resulting render) sees the
-      // matching ref and writes back to the correct key.
-      loadedWorkspaceRef.current = workspacePath;
-      setIsLoaded(true);
-    })();
-
-    return () => { cancelled = true; };
-  }, [workspacePath]);
-
-  // Save effect guards on `isLoaded && workspacePath` AND on the
-  // `loadedWorkspaceRef` matching the current workspacePath. The ref check is
-  // what prevents cross-workspace data corruption: if the workspacePath dep
-  // changed but the new workspace's load hasn't completed (or is in flight),
-  // the ref is null and the save is skipped, so the previous workspace's
-  // `repos` value never gets written into the new workspace's storage key.
-  useEffect(() => {
-    if (!isLoaded || !workspacePath) return;
-    if (loadedWorkspaceRef.current !== workspacePath) return;
-    storage.set(reposKey(workspacePath), repos).catch(() => {});
-  }, [repos, isLoaded, workspacePath]);
+  // === Leaf callbacks ===
 
   const getRepo = useCallback((id: string) => repos.find(r => r.id === id), [repos]);
   const getCloneStatus = useCallback((id: string) => cloneStates[id] ?? { state: 'idle' as const }, [cloneStates]);
 
-  const upsertRepo = useCallback((repo: Repo) => {
-    setRepos(prev => {
-      const idx = prev.findIndex(r => r.id === repo.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = repo;
-        return next;
-      }
-      return [...prev, repo];
-    });
+  /**
+   * Compute a slug for `repo` that won't collide with any sibling under the
+   * same folder. Used by `upsertRepo` whenever a slug isn't supplied or
+   * supplied-but-colliding (e.g. on a rename into an existing folder).
+   *
+   * `selfId` is the id we should ignore when checking for collisions —
+   * critical when re-saving a repo in place (its own previous slug
+   * shouldn't be considered a collision against itself).
+   */
+  const resolveSlugForFolder = useCallback((
+    repoList: Repo[],
+    folder: string,
+    desiredSlug: string,
+    fallbackName: string,
+    selfId: string | null,
+  ): string => {
+    const cleaned = desiredSlug.trim() || slugify(fallbackName, 'repo');
+    const used = new Set<string>();
+    for (const other of repoList) {
+      if (other.id === selfId) continue;
+      const otherFolder = other.folder ?? '';
+      if (otherFolder !== folder) continue;
+      const otherSlug = other.slug ?? '';
+      if (otherSlug !== '') used.add(otherSlug);
+    }
+    return disambiguateSlug(cleaned, used);
   }, []);
 
-  const deleteRepo = useCallback(async (id: string, options?: { removeClone?: boolean }) => {
+  /** Reload repos from disk. Used both at workspace open and after the file
+   *  watcher reports a change. The `cancelled` flag protects against a
+   *  workspace switch firing mid-reload — caller passes its own
+   *  cancellation token. */
+  const reloadRepos = useCallback(async (
+    workspace: string,
+    isCancelled: () => boolean,
+  ): Promise<Repo[] | null> => {
+    try {
+      const loaded = await repoFileStore.loadAllRepos(workspace);
+      if (isCancelled()) return null;
+      return loaded;
+    } catch (err) {
+      console.warn('[repos] reload failed', err);
+      return null;
+    }
+  }, []);
+
+  // === Imperative file-store ops with state sync ===
+
+  /**
+   * Write `repo` to disk and update React state. Slug+folder are
+   * normalized + disambiguated against the live repo list before the
+   * save, so callers don't have to think about collisions. The repo's
+   * previous id (when it exists) is passed to the file store so an old
+   * file gets cleaned up after a slug/folder rename.
+   */
+  const persistRepo = useCallback(async (
+    workspace: string,
+    incoming: Repo,
+    previousId: string | null,
+  ): Promise<Repo | null> => {
+    const folder = normalizeFolder(incoming.folder ?? '');
+    const desiredSlug = (incoming.slug ?? '').trim() || slugify(incoming.name, 'repo');
+    const slug = resolveSlugForFolder(
+      reposRef.current,
+      folder,
+      desiredSlug,
+      incoming.name,
+      previousId,
+    );
+    const newId = joinId(folder, slug);
+    const persisted: Repo = {
+      ...incoming,
+      id: newId,
+      slug,
+      folder: folder === '' ? undefined : folder,
+    };
+
+    try {
+      // Mark BOTH the new file (we're about to write it) and the old
+      // file (we may delete it) as recent echoes — the watcher fires
+      // for both create and unlink events.
+      const newAbs = `${workspace}/.quipu/repos/${newId}.json`;
+      markRecentWrite(newAbs);
+      if (previousId !== null && previousId !== newId) {
+        const oldAbs = `${workspace}/.quipu/repos/${previousId}.json`;
+        markRecentWrite(oldAbs);
+      }
+      await repoFileStore.saveRepo(workspace, persisted, previousId ?? undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to save repo: ${message}`, 'error');
+      return null;
+    }
+
+    // State update — replace if any repo shares previousId or newId,
+    // otherwise append.
+    setRepos(prev => {
+      let replaced = false;
+      const next: Repo[] = [];
+      for (const r of prev) {
+        if (r.id === previousId || r.id === newId) {
+          if (!replaced) {
+            next.push(persisted);
+            replaced = true;
+          }
+          continue;
+        }
+        next.push(r);
+      }
+      if (!replaced) next.push(persisted);
+      return next;
+    });
+
+    return persisted;
+  }, [markRecentWrite, resolveSlugForFolder, showToast]);
+
+  const upsertRepo = useCallback((repo: Repo): void => {
+    if (!workspacePath) return;
+    const previous = reposRef.current.find(r => r.id === repo.id);
+    void persistRepo(workspacePath, repo, previous ? previous.id : null);
+  }, [persistRepo, workspacePath]);
+
+  const deleteRepo = useCallback(async (id: string, options?: { removeClone?: boolean }): Promise<void> => {
+    if (!workspacePath) return;
     const repo = reposRef.current.find(r => r.id === id);
     if (!repo) return;
+
+    // Mark for echo suppression before initiating the delete.
+    const abs = `${workspacePath}/.quipu/repos/${id}.json`;
+    markRecentWrite(abs);
+
+    try {
+      await repoFileStore.deleteRepo(workspacePath, id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to delete repo: ${message}`, 'error');
+      return;
+    }
+
     if (options?.removeClone && repo.localClonePath) {
       try {
         await fs.deletePath(repo.localClonePath);
@@ -176,6 +267,7 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
         console.warn('[repos] failed to delete clone dir', repo.localClonePath, err);
       }
     }
+
     setRepos(prev => prev.filter(r => r.id !== id));
     setCloneStates(prev => {
       if (!prev[id]) return prev;
@@ -183,21 +275,54 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
       delete next[id];
       return next;
     });
-  }, []);
+  }, [markRecentWrite, showToast, workspacePath]);
 
-  const deleteFolder = useCallback(async (folder: string, options?: { removeClones?: boolean }) => {
-    const targetKey = folder.trim();
-    const matches = reposRef.current.filter(r => (r.folder?.trim() ?? '') === targetKey);
-    if (matches.length === 0) return;
+  const deleteFolder = useCallback(async (folder: string, options?: { removeClones?: boolean }): Promise<void> => {
+    if (!workspacePath) return;
+    let folderPath: string;
+    try {
+      folderPath = normalizeFolder(folder);
+    } catch {
+      showToast(`"${folder}" is not a valid folder name.`, 'error');
+      return;
+    }
+    if (folderPath === '') return;
+
+    // Snapshot which repos lived in this folder (and its descendants) BEFORE
+    // we delete on disk — we need their localClonePath to optionally remove
+    // disk clones. Mirrors the legacy semantics where deleteFolder removed
+    // every repo whose folder matched.
+    const matches = reposRef.current.filter(r => {
+      const rf = (r.folder ?? '').trim();
+      return rf === folderPath || rf.startsWith(`${folderPath}/`);
+    });
+
+    try {
+      await repoFileStore.deleteFolder(workspacePath, folderPath, { recursive: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to delete folder: ${message}`, 'error');
+      return;
+    }
+
     if (options?.removeClones) {
       await Promise.all(matches.map(async (repo) => {
-        if (repo.localClonePath) {
-          try { await fs.deletePath(repo.localClonePath); } catch (err) { console.warn('[repos] failed to delete clone dir', repo.localClonePath, err); }
+        if (!repo.localClonePath) return;
+        try {
+          await fs.deletePath(repo.localClonePath);
+        } catch (err) {
+          console.warn('[repos] failed to delete clone dir', repo.localClonePath, err);
         }
       }));
     }
+
+    // Reload from disk so the in-memory state matches reality. The folder
+    // delete ran recursively; reading back is the simplest way to converge.
+    const result = await reloadRepos(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
+    if (result) setRepos(result);
+
+    // Clear any in-memory clone-state entries for the removed repos.
     const ids = new Set(matches.map(r => r.id));
-    setRepos(prev => prev.filter(r => !ids.has(r.id)));
     setCloneStates(prev => {
       let changed = false;
       const next = { ...prev };
@@ -206,7 +331,7 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
       }
       return changed ? next : prev;
     });
-  }, []);
+  }, [reloadRepos, showToast, workspacePath]);
 
   const cloneRepoForAgent = useCallback(async (repoId: string, agentId: string): Promise<string> => {
     const repo = reposRef.current.find(r => r.id === repoId);
@@ -246,6 +371,73 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
       setCloneStates(prev => ({ ...prev, [repoId]: { state: 'error', message } }));
       throw err;
     }
+  }, [workspacePath]);
+
+  // === Effects (last) ===
+
+  // Load (and reload on workspace switch). Each branch operates on its own
+  // captured `workspace` so a stale resolution that lands after we've
+  // moved on to another workspace can be detected and discarded via the
+  // `cancelled` flag + the loadedWorkspaceRef comparison.
+  useEffect(() => {
+    let cancelled = false;
+    loadedWorkspaceRef.current = null;
+
+    // Reset on every workspace change. `cloneStates` is in-memory only — a
+    // clone-in-progress that belongs to the previous workspace must not
+    // bleed into the new one.
+    setIsLoaded(false);
+    setRepos([]);
+    setCloneStates({});
+    // Echo-suppression entries are workspace-scoped paths; abandon them.
+    recentWriteTimesRef.current.clear();
+
+    if (!workspacePath) {
+      return () => { cancelled = true; };
+    }
+
+    const workspace = workspacePath;
+    let unwatch: (() => void) | null = null;
+
+    (async () => {
+      const loaded = await reloadRepos(workspace, () => cancelled);
+      if (cancelled) return;
+      if (loaded === null) {
+        // Even on failure, mark loaded so the UI flips out of its
+        // skeleton state. Empty + isLoaded=true is the right "fresh
+        // workspace, nothing here yet" presentation.
+        loadedWorkspaceRef.current = workspace;
+        setIsLoaded(true);
+        return;
+      }
+
+      setRepos(loaded);
+      loadedWorkspaceRef.current = workspace;
+      setIsLoaded(true);
+    })();
+
+    // Subscribe to file changes under .quipu/. AgentContext also watches
+    // the same root — the file watcher in electron/main.cjs supports a
+    // single active root, so both contexts share it and filter by
+    // subtree. Echo-suppression filters out our own writes.
+    unwatch = watchDirRecursive(`${workspace}/.quipu`, (event) => {
+      if (loadedWorkspaceRef.current !== workspace) return;
+      // Filter to repos/ subtree — agent file changes don't concern us.
+      if (event.path && !event.path.includes('/.quipu/repos/')) return;
+      if (event.path && isRecentEcho(event.path)) return;
+      void (async () => {
+        const result = await reloadRepos(workspace, () => loadedWorkspaceRef.current !== workspace);
+        if (!result) return;
+        if (loadedWorkspaceRef.current !== workspace) return;
+        setRepos(result);
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+      if (unwatch) unwatch();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspacePath]);
 
   const value: RepoContextValue = {

@@ -5,6 +5,7 @@ import type { Repo } from '@/types/agent';
 import { useTab } from '../../context/TabContext';
 import { useRepo } from '../../context/RepoContext';
 import { Section, Field } from '../agent-editor/EditorLayout';
+import { slugify } from '../../services/slug';
 
 interface RepoEditorViewProps {
   tab: Tab;
@@ -42,6 +43,7 @@ export default function RepoEditorView({ tab }: RepoEditorViewProps) {
     const repo: Repo = {
       id: repoId,
       name: trimmedName,
+      slug: existing?.slug ?? slugify(trimmedName, 'repo'),
       url: trimmedUrl,
       folder: folder.trim() || undefined,
       localClonePath: existing?.localClonePath,
