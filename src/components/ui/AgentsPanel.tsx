@@ -5,7 +5,6 @@ import {
   PencilSimpleIcon,
   CaretRightIcon,
   CaretDownIcon,
-  FolderIcon,
   FolderPlusIcon,
   TrashIcon,
   PlusIcon,
@@ -15,10 +14,15 @@ import { useAgent } from '../../context/AgentContext';
 import { useToast } from './Toast';
 import ContextMenu, { type ContextMenuItem } from './ContextMenu';
 import PromptDialog from './PromptDialog';
+import { TreeFolder } from './TreeFolder';
+import { buildTree, getRootItems } from '../../lib/buildTree';
 import type { Agent, AgentKind } from '@/types/agent';
 
-const UNCATEGORIZED = '__uncategorized__';
 const DRAG_MIME = 'application/x-quipu-agent';
+
+/** Sentinel "drag target = root of this kind". Folder paths are never empty,
+ *  so collisions with real folders are impossible. */
+const ROOT_DRAG_KEY_PREFIX = '__root__:';
 
 interface MenuState {
   x: number;
@@ -27,8 +31,8 @@ interface MenuState {
 }
 
 type PromptState =
-  | { mode: 'create-folder'; kind: AgentKind }
-  | { mode: 'rename-folder'; kind: AgentKind; oldName: string };
+  | { mode: 'create-folder'; kind: AgentKind; parent: string }
+  | { mode: 'rename-folder'; kind: AgentKind; oldPath: string };
 
 export default function AgentsPanel() {
   const { openAgentTab, openAgentEditorTab } = useTab();
@@ -46,33 +50,28 @@ export default function AgentsPanel() {
 
   const closeMenu = () => setMenu(null);
 
-  // Group agents by kind, then by folder (merging declared-empty folders).
-  // Items inside each folder (and the uncategorized list) are sorted by
-  // `updatedAt` descending so the most-recently-modified row floats to the
-  // top. The folder list itself stays alphabetical.
+  // Build a recursive tree per kind. Items in each tree are typed with the
+  // shared Agent shape; the kinds partition naturally because folders can
+  // appear in either or both lists (the context tracks them separately —
+  // empty folders surface in both).
   //
-  // The `?? ''` guard hardens against any pre-MVP persisted record that might
-  // be missing `updatedAt` — the load normalizer in AgentContext defaults
-  // other fields but not the timestamps.
+  // Items inside each folder (and the root list) are sorted by `updatedAt`
+  // descending so the most-recently-modified row floats to the top. The
+  // folder hierarchy itself stays alphabetical (handled inside buildTree).
+  // The `?? ''` guard hardens against any pre-MVP persisted record missing
+  // `updatedAt` — the load normalizer in AgentContext defaults other fields
+  // but not the timestamps.
   const sections = useMemo(() => {
     const byRecency = (a: Agent, b: Agent) => {
       const cmp = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
-      return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+      return cmp !== 0 ? cmp : (a.name ?? '').localeCompare(b.name ?? '');
     };
     const buildSection = (kind: AgentKind) => {
-      const items = agents.filter(a => a.kind === kind);
-      const folderNames = new Set<string>();
-      for (const item of items) if (item.folder) folderNames.add(item.folder);
+      const items = agents.filter((a) => a.kind === kind);
       const declared = kind === 'agent' ? folders.agents : folders.chats;
-      for (const f of declared) folderNames.add(f);
-
-      const folderList = Array.from(folderNames).sort((a, b) => a.localeCompare(b));
-      const grouped = folderList.map((folder) => ({
-        folder,
-        items: items.filter(i => i.folder === folder).slice().sort(byRecency),
-      }));
-      const uncategorized = items.filter(i => !i.folder).slice().sort(byRecency);
-      return { kind, grouped, uncategorized };
+      const tree = buildTree<Agent>(items, declared, { sortItems: byRecency });
+      const rootItems = getRootItems(items, { sortItems: byRecency });
+      return { kind, tree, rootItems, totalCount: items.length };
     };
     return {
       chats: buildSection('chat'),
@@ -95,24 +94,49 @@ export default function AgentsPanel() {
       // Safe because createFolder sidebar uses its own state; we don't rely on it here.
     }
   };
-  const handleNewFolder = (kind: AgentKind) => setPrompt({ mode: 'create-folder', kind });
-  const handleRenameFolder = (kind: AgentKind, oldName: string) => setPrompt({ mode: 'rename-folder', kind, oldName });
+  const handleNewFolder = (kind: AgentKind, parent: string = '') =>
+    setPrompt({ mode: 'create-folder', kind, parent });
+  const handleRenameFolder = (kind: AgentKind, oldPath: string) =>
+    setPrompt({ mode: 'rename-folder', kind, oldPath });
 
   const handlePromptConfirm = (value: string) => {
     if (!prompt) return;
+    const trimmed = value.trim();
+    if (!trimmed) { setPrompt(null); return; }
     if (prompt.mode === 'create-folder') {
-      createFolder(prompt.kind, value);
+      // Slug the user's free-text into a path-safe segment, then nest under
+      // the parent folder.
+      const segment = slugifySegment(trimmed);
+      if (segment === '') {
+        showToast(`"${trimmed}" is not a valid folder name.`, 'error');
+        setPrompt(null);
+        return;
+      }
+      const fullPath = prompt.parent ? `${prompt.parent}/${segment}` : segment;
+      createFolder(prompt.kind, fullPath);
     } else {
-      renameFolder(prompt.kind, prompt.oldName, value);
+      // Rename keeps the parent path stable; only the leaf segment changes.
+      const segment = slugifySegment(trimmed);
+      if (segment === '') {
+        showToast(`"${trimmed}" is not a valid folder name.`, 'error');
+        setPrompt(null);
+        return;
+      }
+      const slashIdx = prompt.oldPath.lastIndexOf('/');
+      const parent = slashIdx === -1 ? '' : prompt.oldPath.slice(0, slashIdx);
+      const newPath = parent ? `${parent}/${segment}` : segment;
+      if (newPath !== prompt.oldPath) {
+        renameFolder(prompt.kind, prompt.oldPath, newPath);
+      }
     }
     setPrompt(null);
   };
-  const handleDeleteFolder = (kind: AgentKind, name: string, count: number) => {
-    const msg = count > 0
-      ? `Delete folder "${name}"? The ${count} item${count === 1 ? '' : 's'} inside will move to Uncategorized.`
-      : `Delete empty folder "${name}"?`;
+  const handleDeleteFolder = (kind: AgentKind, path: string, directCount: number) => {
+    const msg = directCount > 0
+      ? `Delete folder "${path}"? The ${directCount} item${directCount === 1 ? '' : 's'} directly inside will move up.`
+      : `Delete folder "${path}"?`;
     if (!window.confirm(msg)) return;
-    deleteFolder(kind, name);
+    deleteFolder(kind, path);
   };
   const handleDelete = (agent: Agent) => {
     if (!window.confirm(`Delete "${agent.name}"? This wipes its transcript too.`)) return;
@@ -131,19 +155,20 @@ export default function AgentsPanel() {
       { label: 'New chat', onClick: () => { closeMenu(); handleNewChat(); } },
       { label: 'New agent', onClick: () => { closeMenu(); handleNewAgent(); } },
       { separator: true },
-      { label: kind === 'chat' ? 'New chats folder' : 'New agents folder', onClick: () => { closeMenu(); handleNewFolder(kind ?? 'agent'); } },
+      { label: kind === 'chat' ? 'New chats folder' : 'New agents folder', onClick: () => { closeMenu(); handleNewFolder(kind ?? 'agent', ''); } },
     ];
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
-  const openFolderMenu = (e: React.MouseEvent, kind: AgentKind, folder: string, count: number) => {
+  const openFolderMenu = (e: React.MouseEvent, kind: AgentKind, path: string, directItemCount: number) => {
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [
-      { label: 'New chat in folder', onClick: () => { closeMenu(); if (kind === 'chat') handleNewChat(folder); else handleNewChat(folder); } },
-      { label: 'New agent in folder', onClick: () => { closeMenu(); handleNewAgent(folder); } },
+      { label: kind === 'chat' ? 'New chat in folder' : 'New agent in folder',
+        onClick: () => { closeMenu(); if (kind === 'chat') handleNewChat(path); else handleNewAgent(path); } },
+      { label: 'New folder here', onClick: () => { closeMenu(); handleNewFolder(kind, path); } },
       { separator: true },
-      { label: 'Rename folder', onClick: () => { closeMenu(); handleRenameFolder(kind, folder); } },
-      { label: 'Delete folder', danger: true, onClick: () => { closeMenu(); handleDeleteFolder(kind, folder, count); } },
+      { label: 'Rename folder', onClick: () => { closeMenu(); handleRenameFolder(kind, path); } },
+      { label: 'Delete folder', danger: true, onClick: () => { closeMenu(); handleDeleteFolder(kind, path, directItemCount); } },
     ];
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
@@ -166,19 +191,19 @@ export default function AgentsPanel() {
   // ---------- drag & drop ----------
   const onDragStart = (e: React.DragEvent, agent: Agent) => {
     e.dataTransfer.setData(DRAG_MIME, agent.id);
+    // Stash the kind too so a drop into the OTHER section can convert
+    // the agent in addition to (re-)folder-ing it.
+    e.dataTransfer.setData(`${DRAG_MIME}+kind`, agent.kind);
     e.dataTransfer.effectAllowed = 'move';
   };
-  const onDropZone = (e: React.DragEvent, key: string, target: { kind?: AgentKind; folder?: string }) => {
+  const onDropFolder = (e: React.DragEvent, kind: AgentKind, folderPath: string) => {
     e.preventDefault();
     setDragOver(null);
     const id = e.dataTransfer.getData(DRAG_MIME);
     if (!id) return;
-    moveAgent(id, {
-      kind: target.kind,
-      folder: target.folder ?? '',
-    });
+    moveAgent(id, { kind, folder: folderPath });
   };
-  const onDragOver = (e: React.DragEvent, key: string) => {
+  const onDragOverFolder = (e: React.DragEvent, key: string) => {
     if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -243,44 +268,44 @@ export default function AgentsPanel() {
           <KindSection
             kind="chat"
             label="Chats"
-            countBadge={agents.filter(a => a.kind === 'chat').length}
-            grouped={sections.chats.grouped}
-            uncategorized={sections.chats.uncategorized}
+            countBadge={sections.chats.totalCount}
+            tree={sections.chats.tree}
+            rootItems={sections.chats.rootItems}
             collapsed={collapsed}
             setCollapsed={setCollapsed}
             dragOver={dragOver}
             openAgent={(a) => openAgentTab(a.id, a.name)}
             editAgent={(a) => openAgentEditorTab(a.id, a.name)}
             onRowMenu={openRowMenu}
-            onFolderMenu={(e, folder, count) => openFolderMenu(e, 'chat', folder, count)}
+            onFolderMenu={(e, path, directCount) => openFolderMenu(e, 'chat', path, directCount)}
             onSectionMenu={(e) => openPanelMenu(e, 'chat')}
             onNewItem={() => handleNewChat()}
-            onNewFolder={() => handleNewFolder('chat')}
+            onNewFolder={() => handleNewFolder('chat', '')}
             onDragStartRow={onDragStart}
-            onDragOverZone={onDragOver}
-            onDropZone={onDropZone}
+            onDragOverFolder={onDragOverFolder}
+            onDropFolder={(e, path) => onDropFolder(e, 'chat', path)}
             isTurnActive={isTurnActive}
           />
 
           <KindSection
             kind="agent"
             label="Agents"
-            countBadge={agents.filter(a => a.kind === 'agent').length}
-            grouped={sections.agents.grouped}
-            uncategorized={sections.agents.uncategorized}
+            countBadge={sections.agents.totalCount}
+            tree={sections.agents.tree}
+            rootItems={sections.agents.rootItems}
             collapsed={collapsed}
             setCollapsed={setCollapsed}
             dragOver={dragOver}
             openAgent={(a) => openAgentTab(a.id, a.name)}
             editAgent={(a) => openAgentEditorTab(a.id, a.name)}
             onRowMenu={openRowMenu}
-            onFolderMenu={(e, folder, count) => openFolderMenu(e, 'agent', folder, count)}
+            onFolderMenu={(e, path, directCount) => openFolderMenu(e, 'agent', path, directCount)}
             onSectionMenu={(e) => openPanelMenu(e, 'agent')}
             onNewItem={() => handleNewAgent()}
-            onNewFolder={() => handleNewFolder('agent')}
+            onNewFolder={() => handleNewFolder('agent', '')}
             onDragStartRow={onDragStart}
-            onDragOverZone={onDragOver}
-            onDropZone={onDropZone}
+            onDragOverFolder={onDragOverFolder}
+            onDropFolder={(e, path) => onDropFolder(e, 'agent', path)}
             isTurnActive={isTurnActive}
           />
         </div>
@@ -294,14 +319,18 @@ export default function AgentsPanel() {
         open={!!prompt}
         title={
           prompt?.mode === 'rename-folder'
-            ? `Rename folder "${prompt.oldName}"`
+            ? `Rename folder "${prompt.oldPath}"`
             : prompt?.mode === 'create-folder'
-              ? `New ${prompt.kind === 'chat' ? 'chats' : 'agents'} folder`
+              ? prompt.parent
+                ? `New folder under "${prompt.parent}"`
+                : `New ${prompt.kind === 'chat' ? 'chats' : 'agents'} folder`
               : ''
         }
         label="Folder name"
         placeholder="e.g. research"
-        defaultValue={prompt?.mode === 'rename-folder' ? prompt.oldName : ''}
+        defaultValue={prompt?.mode === 'rename-folder'
+          ? leafSegment(prompt.oldPath)
+          : ''}
         confirmLabel={prompt?.mode === 'rename-folder' ? 'Rename' : 'Create'}
         onConfirm={handlePromptConfirm}
         onCancel={() => setPrompt(null)}
@@ -310,50 +339,88 @@ export default function AgentsPanel() {
   );
 }
 
+// ---------- helpers ----------
+
+/** Slug a single path segment without imposing the path-shape rules of
+ *  `normalizeFolder` (which rejects internal slashes — fine, we only feed
+ *  it a single segment here). Mirror of `services/slug.ts:slugify` for
+ *  the UI's preview. The context's `createFolder` does the canonical
+ *  normalization on the way to disk, so this is best-effort. */
+function slugifySegment(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function leafSegment(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx === -1 ? path : path.slice(idx + 1);
+}
+
 // ---------- section ----------
 interface KindSectionProps {
   kind: AgentKind;
   label: string;
   countBadge: number;
-  grouped: Array<{ folder: string; items: Agent[] }>;
-  uncategorized: Agent[];
+  tree: ReturnType<typeof buildTree<Agent>>;
+  rootItems: Agent[];
   collapsed: Record<string, boolean>;
   setCollapsed: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   dragOver: string | null;
   openAgent: (a: Agent) => void;
   editAgent: (a: Agent) => void;
   onRowMenu: (e: React.MouseEvent, a: Agent) => void;
-  onFolderMenu: (e: React.MouseEvent, folder: string, count: number) => void;
+  onFolderMenu: (e: React.MouseEvent, path: string, directItemCount: number) => void;
   onSectionMenu: (e: React.MouseEvent) => void;
   onNewItem: () => void;
   onNewFolder: () => void;
   onDragStartRow: (e: React.DragEvent, a: Agent) => void;
-  onDragOverZone: (e: React.DragEvent, key: string) => void;
-  onDropZone: (e: React.DragEvent, key: string, target: { kind?: AgentKind; folder?: string }) => void;
+  onDragOverFolder: (e: React.DragEvent, key: string) => void;
+  onDropFolder: (e: React.DragEvent, path: string) => void;
   isTurnActive: (id: string) => boolean;
 }
 
 function KindSection({
-  kind, label, countBadge, grouped, uncategorized,
+  kind, label, countBadge, tree, rootItems,
   collapsed, setCollapsed, dragOver,
   openAgent, editAgent, onRowMenu, onFolderMenu, onSectionMenu,
   onNewItem, onNewFolder,
-  onDragStartRow, onDragOverZone, onDropZone, isTurnActive,
+  onDragStartRow, onDragOverFolder, onDropFolder, isTurnActive,
 }: KindSectionProps) {
   const sectionKey = `section:${kind}`;
-  const headerKey = `header:${kind}`;
+  const rootDragKey = `${ROOT_DRAG_KEY_PREFIX}${kind}`;
   const isOpen = !collapsed[sectionKey];
   const ItemIcon = kind === 'chat' ? ChatCircleDotsIcon : RobotIcon;
+  const isDraggingOverRoot = dragOver === rootDragKey;
+
+  const renderRow = (agent: Agent, indentPx: number) => (
+    <AgentRow
+      key={agent.id}
+      agent={agent}
+      indentPx={indentPx}
+      running={isTurnActive(agent.id)}
+      onOpen={() => openAgent(agent)}
+      onEdit={() => editAgent(agent)}
+      onContextMenu={(e) => onRowMenu(e, agent)}
+      onDragStart={(e) => onDragStartRow(e, agent)}
+    />
+  );
+
+  const toggle = (path: string) => setCollapsed((c) => ({ ...c, [path]: !c[path] }));
+
+  const handleHeaderDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    onDropFolder(e, '');
+  };
 
   return (
-    <section
-      className="mb-2"
-      onContextMenu={onSectionMenu}
-    >
+    <section className="mb-2" onContextMenu={onSectionMenu}>
       <div
-        className={`group/section flex items-center gap-1 h-7 px-2 mx-1 rounded hover:bg-bg-elevated ${dragOver === headerKey ? 'bg-accent/10 ring-1 ring-accent/40' : ''}`}
-        onDragOver={(e) => onDragOverZone(e, headerKey)}
-        onDrop={(e) => onDropZone(e, headerKey, { kind, folder: '' })}
+        className={`group/section flex items-center gap-1 h-7 px-2 mx-1 rounded hover:bg-bg-elevated ${isDraggingOverRoot ? 'bg-accent/10 ring-1 ring-accent/40' : ''}`}
+        onDragOver={(e) => onDragOverFolder(e, rootDragKey)}
+        onDrop={handleHeaderDrop}
       >
         <button
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
@@ -384,70 +451,48 @@ function KindSection({
 
       {isOpen && (
         <>
-          {grouped.map(({ folder, items }) => {
-            const folderKey = `${kind}:folder:${folder}`;
-            const folderOpen = !collapsed[folderKey];
-            return (
-              <div key={folderKey}>
-                <div
-                  className={`group/folder flex items-center gap-1 h-7 pl-4 pr-2 mx-1 rounded hover:bg-bg-elevated ${dragOver === folderKey ? 'bg-accent/10 ring-1 ring-accent/40' : ''}`}
-                  onContextMenu={(e) => onFolderMenu(e, folder, items.length)}
-                  onDragOver={(e) => onDragOverZone(e, folderKey)}
-                  onDrop={(e) => onDropZone(e, folderKey, { kind, folder })}
-                >
-                  <button
-                    className="flex items-center gap-1.5 flex-1 min-w-0 text-left text-[11px] text-text-tertiary"
-                    onClick={() => setCollapsed((c) => ({ ...c, [folderKey]: folderOpen }))}
-                  >
-                    {folderOpen ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-                    <FolderIcon size={12} weight="fill" className="text-text-tertiary" />
-                    <span className="truncate">{folder}</span>
-                    <span className="ml-auto text-[10px] text-text-tertiary">{items.length}</span>
-                  </button>
-                </div>
-                {folderOpen && items.map(agent => (
-                  <AgentRow
-                    key={agent.id}
-                    agent={agent}
-                    indentPx={32}
-                    running={isTurnActive(agent.id)}
-                    onOpen={() => openAgent(agent)}
-                    onEdit={() => editAgent(agent)}
-                    onContextMenu={(e) => onRowMenu(e, agent)}
-                    onDragStart={(e) => onDragStartRow(e, agent)}
-                  />
-                ))}
-              </div>
-            );
-          })}
+          {tree.map((node) => (
+            <TreeFolder<Agent>
+              key={node.path}
+              node={node}
+              collapsed={collapsed}
+              onToggle={toggle}
+              dragOver={dragOver}
+              totalCount={countItemsInNode(node)}
+              renderItem={renderRow}
+              onFolderContextMenu={onFolderMenu}
+              onDragOver={onDragOverFolder}
+              onDrop={(e, path) => { e.preventDefault(); onDropFolder(e, path); }}
+              emptyHint="Drop items here"
+            />
+          ))}
 
-          {/* Uncategorized drop zone */}
-          {uncategorized.length > 0 ? (
-            uncategorized.map(agent => (
-              <AgentRow
-                key={agent.id}
-                agent={agent}
-                indentPx={24}
-                running={isTurnActive(agent.id)}
-                onOpen={() => openAgent(agent)}
-                onEdit={() => editAgent(agent)}
-                onContextMenu={(e) => onRowMenu(e, agent)}
-                onDragStart={(e) => onDragStartRow(e, agent)}
-              />
-            ))
-          ) : (
+          {/* Root-level (uncategorized) items render last under the section. */}
+          {rootItems.length > 0 ? (
+            rootItems.map((agent) => renderRow(agent, 24))
+          ) : tree.length === 0 ? (
             <div
-              className={`mx-1 my-1 px-3 py-2 rounded border border-dashed border-border text-[11px] text-text-tertiary text-center ${dragOver === `${kind}:empty` ? 'bg-accent/10 border-accent' : ''}`}
-              onDragOver={(e) => onDragOverZone(e, `${kind}:empty`)}
-              onDrop={(e) => onDropZone(e, `${kind}:empty`, { kind, folder: '' })}
+              className={`mx-1 my-1 px-3 py-2 rounded border border-dashed border-border text-[11px] text-text-tertiary text-center ${isDraggingOverRoot ? 'bg-accent/10 border-accent' : ''}`}
+              onDragOver={(e) => onDragOverFolder(e, rootDragKey)}
+              onDrop={handleHeaderDrop}
             >
               Drop here to move to {label}
             </div>
-          )}
+          ) : null}
         </>
       )}
     </section>
   );
+}
+
+/** Sum direct + nested item counts. Mirrors the helper in TreeFolder.tsx
+ *  (inlined here so KindSection isn't coupled to TreeFolder's internals). */
+function countItemsInNode<T>(node: { items: T[]; children: { items: T[]; children: unknown[] }[] }): number {
+  let total = node.items.length;
+  for (const child of node.children) {
+    total += countItemsInNode(child as { items: T[]; children: { items: T[]; children: unknown[] }[] });
+  }
+  return total;
 }
 
 // ---------- row ----------

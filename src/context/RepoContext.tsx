@@ -21,11 +21,22 @@ export type CloneStatus =
 
 interface RepoContextValue {
   repos: Repo[];
+  /**
+   * Declared folder paths (forward-slash separated). Includes both
+   * explicitly-declared folders (`.folder.json` markers) and folders
+   * implied by repos living inside them. Used by the panel to render
+   * empty folders that have no repos yet.
+   */
+  folders: string[];
   isLoaded: boolean;
   getRepo: (id: string) => Repo | undefined;
   upsertRepo: (repo: Repo) => void;
   deleteRepo: (id: string, options?: { removeClone?: boolean }) => Promise<void>;
   deleteFolder: (folder: string, options?: { removeClones?: boolean }) => Promise<void>;
+  /** Declare a folder so it persists even without any repos in it. */
+  createFolder: (name: string) => Promise<void>;
+  /** Rename a folder — updates both the directory and every repo that lived in it. */
+  renameFolder: (oldName: string, newName: string) => Promise<void>;
   /**
    * Clone a repo into the given agent's scratch directory at
    * `<workspace>/tmp/<agentId>/repos/<repo-name>`. Each agent gets its own
@@ -74,6 +85,7 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
   // === State (per CLAUDE.md hook ordering: state first, callbacks, effects last) ===
 
   const [repos, setRepos] = useState<Repo[]>([]);
+  const [folders, setFolders] = useState<string[]>([]);
   const [cloneStates, setCloneStates] = useState<Record<string, CloneStatus>>({});
   const [isLoaded, setIsLoaded] = useState(false);
 
@@ -149,18 +161,21 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
     return disambiguateSlug(cleaned, used);
   }, []);
 
-  /** Reload repos from disk. Used both at workspace open and after the file
-   *  watcher reports a change. The `cancelled` flag protects against a
-   *  workspace switch firing mid-reload — caller passes its own
-   *  cancellation token. */
+  /** Reload repos and declared folders from disk. Used both at workspace
+   *  open and after the file watcher reports a change. The `cancelled`
+   *  flag protects against a workspace switch firing mid-reload — caller
+   *  passes its own cancellation token. */
   const reloadRepos = useCallback(async (
     workspace: string,
     isCancelled: () => boolean,
-  ): Promise<Repo[] | null> => {
+  ): Promise<{ repos: Repo[]; folders: string[] } | null> => {
     try {
-      const loaded = await repoFileStore.loadAllRepos(workspace);
+      const [loaded, loadedFolders] = await Promise.all([
+        repoFileStore.loadAllRepos(workspace),
+        repoFileStore.loadAllFolders(workspace),
+      ]);
       if (isCancelled()) return null;
-      return loaded;
+      return { repos: loaded, folders: loadedFolders.map((f) => f.path) };
     } catch (err) {
       console.warn('[repos] reload failed', err);
       return null;
@@ -319,7 +334,10 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
     // Reload from disk so the in-memory state matches reality. The folder
     // delete ran recursively; reading back is the simplest way to converge.
     const result = await reloadRepos(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
-    if (result) setRepos(result);
+    if (result) {
+      setRepos(result.repos);
+      setFolders(result.folders);
+    }
 
     // Clear any in-memory clone-state entries for the removed repos.
     const ids = new Set(matches.map(r => r.id));
@@ -331,6 +349,58 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
       }
       return changed ? next : prev;
     });
+  }, [reloadRepos, showToast, workspacePath]);
+
+  const createFolder = useCallback(async (name: string): Promise<void> => {
+    if (!workspacePath) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    let folderPath: string;
+    try {
+      folderPath = normalizeFolder(trimmed);
+    } catch {
+      showToast(`"${trimmed}" is not a valid folder name.`, 'error');
+      return;
+    }
+    if (folderPath === '') return;
+    try {
+      const markerAbs = `${workspacePath}/.quipu/repos/${folderPath}/.folder.json`;
+      markRecentWrite(markerAbs);
+      await repoFileStore.createFolder(workspacePath, folderPath, trimmed);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to create folder: ${message}`, 'error');
+      return;
+    }
+    const result = await reloadRepos(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
+    if (!result) return;
+    setRepos(result.repos);
+    setFolders(result.folders);
+  }, [markRecentWrite, reloadRepos, showToast, workspacePath]);
+
+  const renameFolder = useCallback(async (oldName: string, newName: string): Promise<void> => {
+    if (!workspacePath) return;
+    let oldPath: string;
+    let newPath: string;
+    try {
+      oldPath = normalizeFolder(oldName);
+      newPath = normalizeFolder(newName);
+    } catch {
+      showToast('Invalid folder name.', 'error');
+      return;
+    }
+    if (oldPath === '' || newPath === '' || oldPath === newPath) return;
+    try {
+      await repoFileStore.renameFolder(workspacePath, oldPath, newPath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to rename folder: ${message}`, 'error');
+      return;
+    }
+    const result = await reloadRepos(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
+    if (!result) return;
+    setRepos(result.repos);
+    setFolders(result.folders);
   }, [reloadRepos, showToast, workspacePath]);
 
   const cloneRepoForAgent = useCallback(async (repoId: string, agentId: string): Promise<string> => {
@@ -388,6 +458,7 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
     // bleed into the new one.
     setIsLoaded(false);
     setRepos([]);
+    setFolders([]);
     setCloneStates({});
     // Echo-suppression entries are workspace-scoped paths; abandon them.
     recentWriteTimesRef.current.clear();
@@ -411,7 +482,8 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setRepos(loaded);
+      setRepos(loaded.repos);
+      setFolders(loaded.folders);
       loadedWorkspaceRef.current = workspace;
       setIsLoaded(true);
     })();
@@ -429,7 +501,8 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
         const result = await reloadRepos(workspace, () => loadedWorkspaceRef.current !== workspace);
         if (!result) return;
         if (loadedWorkspaceRef.current !== workspace) return;
-        setRepos(result);
+        setRepos(result.repos);
+        setFolders(result.folders);
       })();
     });
 
@@ -442,11 +515,14 @@ export function RepoProvider({ children }: { children: React.ReactNode }) {
 
   const value: RepoContextValue = {
     repos,
+    folders,
     isLoaded,
     getRepo,
     upsertRepo,
     deleteRepo,
     deleteFolder,
+    createFolder,
+    renameFolder,
     cloneRepoForAgent,
     getCloneStatus,
   };
