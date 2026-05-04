@@ -481,7 +481,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- \[ \] **Unit 10: One-shot import from legacy** `quipu-state.json`
+- \[x\] **Unit 10: One-shot import from legacy** `quipu-state.json`
 
 **Goal:** When a workspace opens for the first time on the new build, drain whatever data still lives in the legacy storage file into files. Idempotent.
 
