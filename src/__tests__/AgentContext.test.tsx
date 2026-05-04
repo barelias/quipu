@@ -58,6 +58,11 @@ vi.mock('../services/quipuFileStore', () => ({
     return () => { entry.unsubscribed = true; };
   },
 }));
+// Stub legacyImport to a no-op so tests that mount AgentContext don't
+// trigger the real import pipeline (which expects `~/.quipu/` IO).
+vi.mock('../services/legacyImport', () => ({
+  importLegacyDataForWorkspace: vi.fn(async () => ({ imported: 0, errors: 0 })),
+}));
 
 let currentWorkspacePath: string | null = null;
 vi.mock('../context/FileSystemContext', () => ({

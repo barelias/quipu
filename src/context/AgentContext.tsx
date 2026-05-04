@@ -7,6 +7,7 @@ import { useToast } from '../components/ui/Toast';
 import * as agentFileStore from '../services/agentFileStore';
 import * as sessionCache from '../services/sessionCache';
 import { watchDirRecursive } from '../services/quipuFileStore';
+import { importLegacyDataForWorkspace } from '../services/legacyImport';
 import { slugify, normalizeFolder, disambiguateSlug, joinId } from '../services/slug';
 import type { Agent, AgentMessage, AgentSession, AgentToolCall, AgentPermissionRequest, AgentImageAttachment } from '@/types/agent';
 
@@ -1297,6 +1298,19 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     let unwatch: (() => void) | null = null;
 
     (async () => {
+      // Drain any data still living in the legacy quipu-state.json into
+      // the file-based store before we read from disk. Idempotent — a
+      // workspace that has already been imported short-circuits to a
+      // no-op. Concurrent calls (RepoContext also runs this) share a
+      // single in-flight promise via the module's re-entry cache.
+      try {
+        await importLegacyDataForWorkspace(workspace);
+      } catch (err) {
+        console.warn('[legacy-import] failed:', err);
+        // Continue — load whatever's already in files.
+      }
+      if (cancelled) return;
+
       const result = await reloadAgentsAndFolders(workspace, () => cancelled);
       if (cancelled) return;
       if (!result) {

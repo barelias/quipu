@@ -2,7 +2,7 @@
 title: File-based knowledge store — agents/repos/chats/folders as files in `.quipu/`, app state in `~/.quipu/`
 type: feat
 status: active
-date: 2026-04-30
+date: 2026-04-30T00:00:00.000Z
 ---
 
 # File-based knowledge store — agents/repos/chats/folders as files in `.quipu/`, app state in `~/.quipu/`
@@ -16,6 +16,7 @@ This is a fundamental architectural pivot. The previous workspace-scoped-keys pl
 ## Problem Frame
 
 The shared JSON file has cost us:
+
 - Inter-process write races that intermittently zeroed `recentWorkspaces` and corrupted workspace-scoped data (fixed in v0.23.0 with `requestSingleInstanceLock`, but the architectural fragility remained).
 - Migration logic that, on a single failed `storage.set`, can wipe globals without the copy completing first.
 - Opacity: a 200KB JSON file with N keys is hard to inspect, hard to back up, and impossible to reason about when something goes wrong.
@@ -86,10 +87,10 @@ None warranted — this is local-fs primitives + plain JSON files. Electron's `f
 ## Key Technical Decisions
 
 - **An entity's "ID" is its folder-relative path.** No more UUIDs. An agent at `<workspace>/.quipu/agents/research/web-scraping/foo.json` has id `research/web-scraping/foo`. The agent's `folder` field is `research/web-scraping`, slug is `foo`. `id = folder + '/' + slug` (or just `slug` at root). Tab paths become `agent://<id>`. Rationale: removes a layer of indirection, makes file ↔ entity mapping unambiguous, and means renaming OR moving the agent updates everywhere by virtue of tab-path lookups going through the same id resolver.
-- **Slug generation: lowercase kebab-case from the entity's name, with `-2`/`-3` suffixes on collision within the same folder.** Empty/punctuation-only names fall back to `chat` or `agent` as the base. Max 64 chars. Rationale: matches `sanitizeRepoName` precedent and FRAME path conventions; readable for humans browsing the directory.
-- **Folder paths are forward-slash separated, no `..`, no leading/trailing slash.** Stored canonically inside the JSON. The on-disk separator is OS-native; the in-memory form is always `/`. Rationale: portability across OSes; security (no path escapes).
-- **Empty folders use a `.folder.json` marker file** (with optional metadata fields like `displayName` for capitalization that doesn't survive slugification). Rationale: preserves declared folders without items; allows future folder metadata; survives `git clean` when committed.
-- **Sessions live in `~/.quipu/sessions-cache/<workspace-hash>/<agent-id-with-folder>.json`** where workspace-hash is a SHA-1 of the absolute workspace path (truncated to 12 chars) plus a manifest entry mapping hash → path for inspection. Rationale: stable directory name independent of the workspace's actual filesystem path (which can be long); keeps the cache out of the user's workspace tree; one file per agent so writes don't grow JSON-blob style.
+- **Slug generation: lowercase kebab-case from the entity's name, with** `-2`**/**`-3` **suffixes on collision within the same folder.** Empty/punctuation-only names fall back to `chat` or `agent` as the base. Max 64 chars. Rationale: matches `sanitizeRepoName` precedent and FRAME path conventions; readable for humans browsing the directory.
+- **Folder paths are forward-slash separated, no** `..`**, no leading/trailing slash.** Stored canonically inside the JSON. The on-disk separator is OS-native; the in-memory form is always `/`. Rationale: portability across OSes; security (no path escapes).
+- **Empty folders use a** `.folder.json` **marker file** (with optional metadata fields like `displayName` for capitalization that doesn't survive slugification). Rationale: preserves declared folders without items; allows future folder metadata; survives `git clean` when committed.
+- **Sessions live in** `~/.quipu/sessions-cache/<workspace-hash>/<agent-id-with-folder>.json` where workspace-hash is a SHA-1 of the absolute workspace path (truncated to 12 chars) plus a manifest entry mapping hash → path for inspection. Rationale: stable directory name independent of the workspace's actual filesystem path (which can be long); keeps the cache out of the user's workspace tree; one file per agent so writes don't grow JSON-blob style.
 - **One-shot legacy import runs at workspace-open, not at app start.** When a workspace opens for the first time on the new build, check if the legacy `quipu-state.json` has `agents:<this-workspace>`, `repos:<this-workspace>`, etc. — if yes, import them as files. As fallback, if pre-v0.22.0 globals (`agents`, `repos`, etc.) still exist AND no other workspace has imported them yet, this workspace claims them. After import succeeds for a key, that key is deleted from the legacy file. Rationale: the user explicitly chose "first opened workspace claims globals" in the previous design; preserves that. Per-workspace import key (e.g., `agents:<path>`) deletes after copy succeeds, so re-imports don't double-add.
 - **File watcher debounces by 200ms** before reloading, because rename ops fire `delete` + `create` in quick succession. Rationale: avoids flicker; matches the FRAME watcher's debounce behavior.
 - **Renames atomically: write the new file first, then delete the old one.** A power-loss between the two steps leaves duplicate files (recoverable) instead of zero files (lost). Rationale: the data-loss incident this plan responds to was caused by exactly the wrong order — clear-before-copy. Never again.
@@ -111,8 +112,8 @@ None warranted — this is local-fs primitives + plain JSON files. Electron's `f
 - **Whether to preserve sessions across an agent rename.** The id changes when the slug changes. Either: rename the session-cache file along with the agent file, or invalidate the old cache and start fresh. I'll default to renaming both atomically.
 - **Whether to GC orphaned session-cache files when their agent is deleted.** Yes, in `deleteAgent`. Confirm not breaking anything.
 - **Whether the file watcher should reload only the affected entity, or rescan the whole directory.** Start with full rescan (simpler, debounced) and optimize if it becomes a perf issue.
-- **Whether to commit `.quipu/agents/` and `.quipu/repos/` by default.** The user said "knowledge base" framing, so probably yes. We update `.gitignore` defaults to exclude `tmp/` (already exists) but NOT `.quipu/`. Sessions live in `~/.quipu/sessions-cache/` so they're never committed.
-- **Whether to expose a `~/.quipu/state.json` schema for plugins to extend.** Out of scope; defer.
+- **Whether to commit** `.quipu/agents/` **and** `.quipu/repos/` **by default.** The user said "knowledge base" framing, so probably yes. We update `.gitignore` defaults to exclude `tmp/` (already exists) but NOT `.quipu/`. Sessions live in `~/.quipu/sessions-cache/` so they're never committed.
+- **Whether to expose a** `~/.quipu/state.json` **schema for plugins to extend.** Out of scope; defer.
 
 ## High-Level Technical Design
 
@@ -223,21 +224,24 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ## Implementation Units
 
-- [ ] **Unit 1: Slug helper + path utils**
+- \[x\] **Unit 1: Slug helper + path utils**
 
 **Goal:** Pure utility module for slugifying names, normalizing folder paths, and disambiguating collisions.
 
 **Files:**
+
 - Create: `src/services/slug.ts` — `slugify(name, fallback)`, `normalizeFolder(folder)`, `disambiguateSlug(base, existing)`, `joinId(folder, slug)`, `splitId(id) -> { folder, slug }`.
 - Test: `src/__tests__/slug.test.ts`.
 
 **Approach:**
+
 - ASCII-fold and lowercase, replace non-alphanumeric runs with `-`, trim leading/trailing dashes, cap at 64 chars.
 - Reject `..` and absolute paths in folder normalization. Forbid leading/trailing slashes. Always forward-slash.
 - Disambiguator returns the base if free, else `base-2`, `base-3`, etc.
 - `splitId('research/web-scraping/foo')` → `{ folder: 'research/web-scraping', slug: 'foo' }`. `splitId('foo')` → `{ folder: '', slug: 'foo' }`.
 
 **Test scenarios:**
+
 - Happy path: simple name → expected slug.
 - Edge cases: empty name (returns fallback), all-punctuation, unicode (transliteration acceptable, fallback to fallback if produces empty), 100-char name (capped), names with leading/trailing whitespace, names with internal multiple spaces.
 - Disambiguation: empty existing list → base unchanged; base in existing → suffix; base + base-2 in existing → base-3.
@@ -245,24 +249,28 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Round-trip: `joinId(splitId(x))` for various x.
 
 **Verification:**
+
 - All scenarios pass via unit tests; no other code in the codebase needs to change at this point.
 
 ---
 
-- [ ] **Unit 2: File-store primitives**
+- \[x\] **Unit 2: File-store primitives**
 
 **Goal:** A thin service that reads, writes, lists, and deletes JSON files in a workspace's `.quipu/` subtree, plus a watcher that emits change events. Dual-runtime through the existing `fileSystem` adapter.
 
 **Files:**
+
 - Create: `src/services/quipuFileStore.ts` — `readJsonFile<T>(absPath)`, `writeJsonFile(absPath, data)` (atomic via tmp + rename), `deleteFile(absPath)`, `listJsonFilesRecursive(absDir)`, `ensureDir(absDir)`, `watchDirRecursive(absDir, onChange)` (debounced 200ms).
 - Test: `src/__tests__/quipuFileStore.test.ts` (uses a tmp directory in vitest).
 
 **Approach:**
+
 - Atomic write: write to `<file>.tmp`, then `fs.renamePath(<file>.tmp, <file>)`. Rename is atomic on the same filesystem.
 - `listJsonFilesRecursive` returns relative paths from the root, excluding `.folder.json` markers.
 - Watch: prefer the existing `watch-directory` IPC if available; otherwise fall back to polling.
 
 **Test scenarios:**
+
 - Happy path: write a JSON file, list the dir, read it back, delete it.
 - Edge case: read non-existent file returns null.
 - Edge case: write to a path whose parent dir doesn't exist auto-creates the dir.
@@ -272,20 +280,23 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Integration: write file A, watcher fires within 300ms with A's path.
 
 **Verification:**
+
 - Tests pass against a real tmp directory.
 - No callsite changes yet — Units 3+ consume this.
 
 ---
 
-- [ ] **Unit 3: agentFileStore service**
+- \[x\] **Unit 3: agentFileStore service**
 
 **Goal:** Domain service for agents — load all, save one, delete one, rename, plus folder operations. Built on Unit 2's primitives.
 
 **Files:**
+
 - Create: `src/services/agentFileStore.ts`.
 - Test: `src/__tests__/agentFileStore.test.ts`.
 
 **Approach:**
+
 - `loadAllAgents(workspacePath): Promise<Agent[]>` — recurses `<workspace>/.quipu/agents/`, parses each `*.json`, attaches the derived `id` (from filename + folder).
 - `loadAllFolders(workspacePath): Promise<FolderNode[]>` — same recursion but collects `.folder.json` markers + dirs.
 - `saveAgent(workspacePath, agent)` — write to `<folder>/<slug>.json`. If `slug` or `folder` changed since last load, also delete the old file.
@@ -294,6 +305,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - `deleteFolder(workspacePath, kind, path, options)` — recursive delete or move-children-up depending on options.
 
 **Test scenarios:**
+
 - Happy path: write 2 agents in different folders, loadAll returns both with correct ids and folders.
 - Edge case: agent in root (folder = ''), agent in nested folder, mixed.
 - Edge case: rename agent (slug change) deletes old file and writes new.
@@ -305,15 +317,17 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Error path: `.quipu/agents/` doesn't exist on first load — return empty list, don't crash.
 
 **Verification:**
+
 - Tests use real tmp dirs.
 
 ---
 
-- [ ] **Unit 4: repoFileStore service**
+- \[x\] **Unit 4: repoFileStore service**
 
 **Goal:** Same shape as Unit 3 for repos.
 
 **Files:**
+
 - Create: `src/services/repoFileStore.ts`.
 - Test: `src/__tests__/repoFileStore.test.ts`.
 
@@ -325,24 +339,27 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- [ ] **Unit 5: sessionCache service**
+- \[x\] **Unit 5: sessionCache service**
 
 **Goal:** Persist chat transcripts in `~/.quipu/sessions-cache/<workspace-hash>/<agent-id>.json`.
 
 **Files:**
+
 - Create: `src/services/sessionCache.ts`.
 - Test: `src/__tests__/sessionCache.test.ts`.
 
 **Approach:**
-- `workspaceHash(absPath)` — SHA-1[:12] of the absolute path. Cached.
+
+- `workspaceHash(absPath)` — SHA-1\[:12\] of the absolute path. Cached.
 - `loadSession(workspacePath, agentId)` → `AgentSession | null`.
 - `saveSession(workspacePath, agentId, session)` — atomic write.
 - `deleteSession(workspacePath, agentId)` — delete file (idempotent).
 - `renameSession(workspacePath, oldAgentId, newAgentId)` — for slug renames.
 - Maintain `~/.quipu/sessions-cache/<hash>/manifest.json` mapping hash → workspace path (only for human inspection — code never reads it back).
-- Save is debounced ~500ms inside the caller (AgentContext) to avoid disk thrash on token-by-token streaming.
+- Save is debounced \~500ms inside the caller (AgentContext) to avoid disk thrash on token-by-token streaming.
 
 **Test scenarios:**
+
 - Happy path: save session, load it, equal.
 - Edge case: same agent id in two different workspaces → two different cache files.
 - Edge case: delete session is a no-op if no file.
@@ -353,15 +370,17 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- [ ] **Unit 6: AgentContext refactor**
+- \[x\] **Unit 6: AgentContext refactor**
 
 **Goal:** Replace all `storage.get/set` calls in `AgentContext` with `agentFileStore` + `sessionCache` calls. Drop the `loadedWorkspaceRef` barrier and the workspaceKeysMigration call (file-based loads don't have the same race). Keep workspace-aware load lifecycle. Hook up the file watcher.
 
 **Files:**
+
 - Modify: `src/context/AgentContext.tsx`.
 - Replace: `src/__tests__/AgentContext.test.tsx`, `src/__tests__/AgentContext.drafts.test.tsx`, `src/__tests__/AgentContext.resumeSession.test.tsx`, `src/__tests__/AgentContext.respondToPermission.test.tsx`. Old tests target the storage-key path that's going away.
 
 **Approach:**
+
 - `useEffect([workspacePath])` calls `agentFileStore.loadAllAgents(workspacePath)` and `agentFileStore.loadAllFolders(workspacePath)`.
 - `upsertAgent(agent)` writes to disk via `agentFileStore.saveAgent(workspacePath, agent)`. State update follows.
 - `deleteAgent(id)` calls `agentFileStore.deleteAgent` AND `sessionCache.deleteSession`.
@@ -373,6 +392,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - `respondToPermission` unchanged.
 
 **Test scenarios:**
+
 - Happy path: provider mounts with `workspacePath = '/foo'`, files exist, state populates.
 - Happy path: `upsertAgent` writes a file, file watcher observes the same change without infinite loop (echo suppression).
 - Edge case: rename agent (slug derivation changes) updates the file on disk and the in-memory id.
@@ -382,17 +402,19 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Integration: send a message → session cache file written within 1s, transcript present after restart.
 
 **Verification:**
+
 - Tests pass.
 - Manually: open a workspace, create an agent, the `<workspace>/.quipu/agents/<slug>.json` file appears.
 - Manually: open the same workspace in a second window, both see the agent immediately.
 
 ---
 
-- [ ] **Unit 7: RepoContext refactor**
+- \[x\] **Unit 7: RepoContext refactor**
 
 **Goal:** Same as Unit 6, scoped to repos.
 
 **Files:**
+
 - Modify: `src/context/RepoContext.tsx`.
 - Replace: `src/__tests__/RepoContext.test.tsx`.
 
@@ -404,16 +426,18 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- [ ] **Unit 8: FileSystemContext — recentWorkspaces moves to `~/.quipu/`**
+- \[x\] **Unit 8: FileSystemContext — recentWorkspaces moves to** `~/.quipu/`
 
 **Goal:** Recent-workspaces and last-opened state move from `quipu-state.json` to `~/.quipu/recent-workspaces.json` and `~/.quipu/window-state.json`. Per-window in-memory contract preserved.
 
 **Files:**
+
 - Modify: `src/context/FileSystemContext.tsx`.
 - Create: `src/services/appConfigStore.ts` — thin wrappers `loadRecentWorkspaces()`, `saveRecentWorkspaces(list)`, `loadLastOpenedWorkspace()`, `saveLastOpenedWorkspace(path)`. Pure file IO via `quipuFileStore` from Unit 2.
 - Modify: `src/__tests__/FileSystemContext.recentWorkspaces.test.tsx`.
 
 **Approach:**
+
 - `appConfigStore` resolves `~` via the existing `electronAPI.getHomeDir` (or `os.homedir()` in main).
 - Path resolution is cached at first call.
 - Browser mode falls back to `localStorage` with the same key shape (no fs available).
@@ -426,16 +450,18 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- [ ] **Unit 9: Multi-level folder UI**
+- \[x\] **Unit 9: Multi-level folder UI**
 
 **Goal:** Recursive tree rendering in the Agents and Repos panels. Drag-and-drop between any folder depths.
 
 **Files:**
+
 - Modify: `src/extensions/agents-panel/<panel files>` (read first to find them).
 - Modify: `src/extensions/repos-panel/<panel files>`.
 - Tests: extend or create renderer tests.
 
 **Approach:**
+
 - Recursive component: render folder header + children (recurse). Track depth for indent styling.
 - DnD drop targets at every folder header (not just root and explicit folders).
 - Folder rename: edit-in-place, dispatches to `renameFolder` on the appropriate context.
@@ -444,6 +470,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Empty folders show a "drop items here" hint.
 
 **Test scenarios:**
+
 - Happy path: 2-deep nesting renders with correct indent.
 - DnD: drag agent from `research/` to `research/web-scraping/` updates folder, file moves.
 - Folder create: at root, at nested.
@@ -454,16 +481,18 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- [ ] **Unit 10: One-shot import from legacy `quipu-state.json`**
+- \[ \] **Unit 10: One-shot import from legacy** `quipu-state.json`
 
 **Goal:** When a workspace opens for the first time on the new build, drain whatever data still lives in the legacy storage file into files. Idempotent.
 
 **Files:**
+
 - Create: `src/services/legacyImport.ts` — `importLegacyDataForWorkspace(workspacePath): Promise<{ imported: number, errors: number }>`.
 - Test: `src/__tests__/legacyImport.test.ts`.
 - Wire: call from `AgentContext` and `RepoContext` workspace-open effect once per workspace per launch.
 
 **Approach:**
+
 - Track import state in `~/.quipu/import-state.json` keyed by absolute workspace path → `{ importedAt: ISO }`. Set after successful import.
 - Read order: prefer `agents:<workspacePath>` (post-v0.22.0 scoped key); fall back to global `agents` AND set a "globals-claimed" marker so a second workspace doesn't re-import them.
 - For each entity in the source:
@@ -475,6 +504,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Sessions migrate to `~/.quipu/sessions-cache/<workspace-hash>/<slug>.json` similarly.
 
 **Test scenarios:**
+
 - Happy path: legacy file has `agents:<wp>` with 3 agents → 3 files appear, key removed.
 - Happy path: legacy file has only global `agents` with 5 agents, this workspace claims them, a second workspace's import is a no-op.
 - Edge case: legacy file empty/missing → no-op, mark imported.
@@ -483,24 +513,28 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 - Integration: post-import, AgentContext loads the same agents from the new file location.
 
 **Verification:**
+
 - Manual: with the user's existing `quipu-state.json` backup, run the import and confirm files appear.
 - The user's lost agents recovery hinges on this unit working correctly.
 
 ---
 
-- [ ] **Unit 11: Tab-path / id migration**
+- \[ \] **Unit 11: Tab-path / id migration**
 
 **Goal:** Tab paths previously used `agent://<uuid>`. New scheme is `agent://<id>` where `id` is the folder-relative slug-path. Migrate any persisted session restore data.
 
 **Files:**
+
 - Modify: `src/types/tab.ts` (no schema change, but doc comment updated).
 - Modify: any callsite that does `tab.path.replace(/^agent:\/\//, '')` (mainly `ChatView.tsx`).
 - Modify: tab session restore path in `WorkspaceContext.tsx` that hydrates open agent tabs.
 
 **Approach:**
+
 - Tab persistence already stores `tab.path`. After import, old tabs still reference UUIDs that no longer exist as files. On hydrate, look up by old id; if not found, log + drop the tab. Don't hard-fail.
 
 **Test scenarios:**
+
 - Happy path: open chat, close, reopen Quipu — chat tab restores via slug-based id.
 - Edge case: persisted tab references stale UUID → tab doesn't reopen, no crash, no error toast.
 
@@ -508,11 +542,12 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- [ ] **Unit 12: Cleanup of legacy storage helpers**
+- \[ \] **Unit 12: Cleanup of legacy storage helpers**
 
 **Goal:** Delete the workspace-scoped storage helpers and their tests now that they're unused.
 
 **Files:**
+
 - Delete: `src/services/workspaceKeys.ts`, `src/services/workspaceKeysMigration.ts`, `src/__tests__/workspaceKeysMigration.test.ts`.
 - Verify: no remaining imports of the deleted files (grep + tsc).
 
@@ -539,9 +574,9 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 ## Risks & Dependencies
 
 | Risk | Mitigation |
-|------|------------|
+| --- | --- |
 | Import bug loses data again. | Atomic writes only delete source keys after destination write succeeds. Backup the legacy file before importing (copy `quipu-state.json` to `quipu-state.json.pre-import.<timestamp>` on first import). Tests cover the failure path explicitly. |
-| File watcher fires for our own writes (echo storm). | Suppress events for ~300ms after our own write by tracking pending paths; or use mtime-comparison to ignore no-op reloads. |
+| File watcher fires for our own writes (echo storm). | Suppress events for \~300ms after our own write by tracking pending paths; or use mtime-comparison to ignore no-op reloads. |
 | Multi-level folder rename causes tab paths to go stale mid-render. | After a folder rename, walk all open tabs and update paths whose prefix matches. |
 | `~/.quipu/` doesn't exist or isn't writable. | Auto-create with mkdir-p on first write; if the create fails (permission), fall back to `~/.config/quipu_simple/` legacy storage and surface a toast. |
 | Slug collision after rename. | Disambiguator guarantees uniqueness within a folder. Test covers it. |

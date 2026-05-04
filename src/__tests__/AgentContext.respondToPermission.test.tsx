@@ -35,6 +35,9 @@ vi.mock('../services/sessionCache', () => hoisted.sessionCache);
 vi.mock('../services/quipuFileStore', () => ({
   watchDirRecursive: () => () => {},
 }));
+vi.mock('../services/legacyImport', () => ({
+  importLegacyDataForWorkspace: vi.fn(async () => ({ imported: 0, errors: 0 })),
+}));
 
 let currentWorkspacePath: string | null = '/foo';
 vi.mock('../context/FileSystemContext', () => ({
