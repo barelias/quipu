@@ -542,7 +542,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- \[ \] **Unit 12: Cleanup of legacy storage helpers**
+- \[x\] **Unit 12: Cleanup of legacy storage helpers**
 
 **Goal:** Delete the workspace-scoped storage helpers and their tests now that they're unused.
 
