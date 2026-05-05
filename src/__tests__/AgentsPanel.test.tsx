@@ -54,6 +54,7 @@ function makeAgent({
   return {
     id: id ?? name,
     name,
+    slug: id ?? name,
     kind,
     systemPrompt: '',
     model: 'claude-sonnet-4-5',

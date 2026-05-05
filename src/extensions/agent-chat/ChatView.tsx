@@ -122,6 +122,14 @@ import ModelPicker from './ModelPicker';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
+// How many trailing messages to render on first open of a chat. Long
+// transcripts (200+ messages with markdown) made open feel laggy because
+// every MessageItem re-parses its markdown. We render the tail and let
+// the user expand history on demand via the "Load earlier" button.
+const INITIAL_VISIBLE_MESSAGES = 50;
+// Each click of "Load earlier" reveals this many additional messages.
+const LOAD_EARLIER_CHUNK = 50;
+
 interface ChatViewProps {
   tab: Tab;
 }
@@ -157,8 +165,17 @@ export default function ChatView({ tab }: ChatViewProps) {
   const [input, setInput] = useState(initialDraft.input);
   const [attachments, setAttachments] = useState<AgentImageAttachment[]>(initialDraft.attachments);
   const [slashIndex, setSlashIndex] = useState(0);
+  // Windowed message rendering — long transcripts (hundreds of messages,
+  // each rendering its own markdown subtree) made initial open painful.
+  // We render the most recent INITIAL_VISIBLE_MESSAGES and surface a
+  // "Load earlier" affordance to expand the window. Reset on tab switch.
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_MESSAGES);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Track whether the user is at the bottom of the transcript so the
+  // autoscroll-on-new-message effect doesn't yank them downward when they
+  // scroll up to read history (or click "Load earlier").
+  const atBottomRef = useRef(true);
 
   // === Custom hooks ===
 
@@ -174,6 +191,10 @@ export default function ChatView({ tab }: ChatViewProps) {
   const slashResults = isSlashQuery ? filterSlashCommands(input, allSlashCommands) : [];
   const showSlashPopover = isSlashQuery;
   const messages = session?.messages ?? [];
+  // Slice from the tail so the most recent messages are always visible.
+  // hiddenCount drives the "Load earlier" button's label.
+  const visibleMessages = visibleCount >= messages.length ? messages : messages.slice(-visibleCount);
+  const hiddenCount = messages.length - visibleMessages.length;
 
   // === Effects (last) ===
 
@@ -200,27 +221,48 @@ export default function ChatView({ tab }: ChatViewProps) {
   }, [agentId, runtimeAvailable, resumeSession]);
 
   // When the active agent changes (tab switch in the same ChatView slot),
-  // reset local state to the new agent's stored draft. We intentionally exclude
-  // `getDraft` from the dep array because it's a stable useCallback — adding it
-  // would not change behavior, but linting against unstable callbacks is what
-  // the eslint-disable below acknowledges.
+  // reset local state to the new agent's stored draft, AND reset the
+  // visible-message window so the new chat opens at its tail. We intentionally
+  // exclude `getDraft` from the dep array because it's a stable useCallback —
+  // adding it would not change behavior, but linting against unstable callbacks
+  // is what the eslint-disable below acknowledges.
   useEffect(() => {
     const d = getDraft(agentId);
     setInput(d.input);
     setAttachments(d.attachments);
+    setVisibleCount(INITIAL_VISIBLE_MESSAGES);
+    atBottomRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-seed only when agentId flips
   }, [agentId]);
+
+  // Track whether the user is scrolled to the bottom of the transcript.
+  // The autoscroll effect below uses this so that scrolling up to read
+  // history (or expanding the window via "Load earlier") doesn't yank
+  // the view back down.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   // Keep the slash selection in range when filtering.
   useEffect(() => {
     if (slashIndex >= slashResults.length && slashResults.length > 0) setSlashIndex(0);
   }, [slashResults.length, slashIndex]);
 
-  // Autoscroll to bottom on new messages or streaming updates.
+  // Autoscroll to bottom on new messages or streaming updates — but only
+  // when the user is already at the bottom or a turn is actively streaming.
+  // Otherwise we'd snap them away from older history they're trying to read.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (atBottomRef.current || active) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [session?.messages, active]);
 
   // Auto-grow textarea as the user types.
@@ -406,15 +448,35 @@ export default function ChatView({ tab }: ChatViewProps) {
           <EmptyState agentName={displayName} present={!!agent} />
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-8">
+            {hiddenCount > 0 && (
+              // "Load earlier" affordance. We expand the window in chunks so
+              // a single click on a 500-message transcript doesn't blow up
+              // initial render again. If fewer than a chunk remain, the
+              // button reveals all of them.
+              <div className="flex justify-center mb-4">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((c) => c + LOAD_EARLIER_CHUNK)}
+                  className="px-4 py-1.5 text-[11px] font-medium rounded-full bg-bg-elevated text-text-secondary hover:bg-bg-overlay hover:text-text-primary transition-colors"
+                >
+                  Load {Math.min(hiddenCount, LOAD_EARLIER_CHUNK)} earlier message{Math.min(hiddenCount, LOAD_EARLIER_CHUNK) === 1 ? '' : 's'}
+                  {hiddenCount > LOAD_EARLIER_CHUNK && ` (${hiddenCount} hidden)`}
+                </button>
+              </div>
+            )}
             <ul className="flex flex-col">
-              {messages.map((m, idx) => (
+              {visibleMessages.map((m, idx) => (
                 <MessageItem
                   key={m.id}
                   message={m}
+                  // `isFirst` is "first IN THE RENDERED LIST" — it controls
+                  // top-margin removal. After hiding history this is the
+                  // first VISIBLE row, not the first in the underlying
+                  // session.
                   isFirst={idx === 0}
                   isLastAssistant={
                     m.role === 'assistant'
-                    && !messages.slice(idx + 1).some((n) => n.role === 'assistant')
+                    && !visibleMessages.slice(idx + 1).some((n) => n.role === 'assistant')
                   }
                   onRespondPermission={(decision, opts) => agent && respondToPermission(agent.id, m.id, decision, opts)}
                   agent={agent}

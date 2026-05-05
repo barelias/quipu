@@ -62,7 +62,10 @@ export default function AgentsPanel() {
   // `updatedAt` — the load normalizer in AgentContext defaults other fields
   // but not the timestamps.
   const sections = useMemo(() => {
-    const byRecency = (a: Agent, b: Agent) => {
+    // Typed against the structural constraint `sortItems` expects so the
+    // comparator slots into both buildTree() and getRootItems() without a
+    // generic-variance mismatch.
+    const byRecency = <U extends { name?: string; updatedAt?: string }>(a: U, b: U) => {
       const cmp = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
       return cmp !== 0 ? cmp : (a.name ?? '').localeCompare(b.name ?? '');
     };
