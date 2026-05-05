@@ -1,4 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Fira+Code:wght@300;400;500;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+/* Noto Sans Historical scripts — used by the StatusBar's scribe glyphs.
+   Loaded via Google Fonts (same pattern as the Latin fonts above) so glyph
+   coverage doesn't depend on the user's OS having Noto Sans Historical
+   packages installed. Fonts are network-fetched on first launch and then
+   cached by Electron / the browser. */
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+Cuneiform&family=Noto+Sans+Linear+B&family=Noto+Sans+Anatolian+Hieroglyphs&family=Noto+Sans+Mayan+Numerals&family=Noto+Sans+Kawi&display=swap");
 @import "highlight.js/styles/atom-one-dark.css";
 @import "katex/dist/katex.min.css";
 
