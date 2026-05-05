@@ -60,6 +60,13 @@ export interface TabContextValue {
   openRepoEditorTab: (repoId: string, repoName: string) => void;
   /** Rename any open tab(s) whose `path` matches. Used for agent auto-renames. */
   renameTabsByPath: (path: string, newName: string) => void;
+  /**
+   * Reassign any open tab(s) whose `path` matches `oldPath` to a new path
+   * (and optionally a new name). Used when an agent's id changes — slug
+   * rename or folder move — so the tab keeps referring to the live agent
+   * file rather than a stale id. No-op if no tab matches `oldPath`.
+   */
+  renameTabPath: (oldPath: string, newPath: string, newName?: string) => void;
   saveFile: (editorInstance: Editor | null) => Promise<void>;
   setIsDirty: (dirty: boolean) => void;
   updateTabContent: (tabId: string, content: string | JSONContent) => void;
@@ -553,6 +560,21 @@ export function TabProvider({ children }: TabProviderProps) {
     });
   }, []);
 
+  const renameTabPath = useCallback((oldPath: string, newPath: string, newName?: string) => {
+    if (oldPath === newPath && newName === undefined) return;
+    setOpenTabs(prev => {
+      let changed = false;
+      const next = prev.map(t => {
+        if (t.path !== oldPath) return t;
+        const nextName = newName ?? t.name;
+        if (t.path === newPath && t.name === nextName) return t;
+        changed = true;
+        return { ...t, path: newPath, name: nextName };
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
   const closeTab = useCallback((tabId: string) => {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
@@ -875,6 +897,7 @@ export function TabProvider({ children }: TabProviderProps) {
     openAgentEditorTab,
     openRepoEditorTab,
     renameTabsByPath,
+    renameTabPath,
     saveFile,
     setIsDirty,
     updateTabContent,

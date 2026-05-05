@@ -77,7 +77,12 @@ vi.mock('../context/RepoContext', () => ({
 }));
 
 vi.mock('../context/TabContext', () => ({
-  useTab: () => ({ renameTabsByPath: vi.fn() }),
+  useTab: () => ({
+    renameTabsByPath: vi.fn(),
+    renameTabPath: vi.fn(),
+    openTabs: [],
+    closeTab: vi.fn(),
+  }),
 }));
 
 vi.mock('../components/ui/Toast', () => ({

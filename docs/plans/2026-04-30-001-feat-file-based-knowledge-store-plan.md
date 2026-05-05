@@ -519,7 +519,7 @@ disambiguate("foo", existing=["foo", "foo-2"]) -> "foo-3"
 
 ---
 
-- \[ \] **Unit 11: Tab-path / id migration**
+- \[x\] **Unit 11: Tab-path / id migration**
 
 **Goal:** Tab paths previously used `agent://<uuid>`. New scheme is `agent://<id>` where `id` is the folder-relative slug-path. Migrate any persisted session restore data.
 

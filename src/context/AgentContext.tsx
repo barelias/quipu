@@ -356,7 +356,7 @@ function partitionFoldersByKind(
 export function AgentProvider({ children }: { children: React.ReactNode }) {
   const { workspacePath } = useFileSystem();
   const { cloneRepoForAgent, repos } = useRepo();
-  const { renameTabsByPath } = useTab();
+  const { renameTabsByPath, renameTabPath, openTabs, closeTab } = useTab();
   const { showToast } = useToast();
 
   // === State (per CLAUDE.md hook ordering: state first, callbacks, effects last) ===
@@ -543,17 +543,18 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
 
-    // If the visible name changed, sync any open tabs (the path stays as
-    // `agent://<previousId>` until Unit 11 — name update is enough for
-    // a usable UX in the interim).
+    // Sync any open tabs. If the id changed (slug rename or folder move),
+    // both the path AND the visible name need to update — the tab path
+    // is `agent://<id>` and stale ids no longer resolve to a file. If
+    // only the name changed, a name-only rename is enough.
     if (previousId !== null && previousId !== newId) {
-      renameTabsByPath(`agent://${previousId}`, persisted.name);
+      renameTabPath(`agent://${previousId}`, `agent://${newId}`, persisted.name);
     } else {
       renameTabsByPath(`agent://${newId}`, persisted.name);
     }
 
     return persisted;
-  }, [markRecentWrite, renameTabsByPath, resolveSlugForFolder, showToast]);
+  }, [markRecentWrite, renameTabPath, renameTabsByPath, resolveSlugForFolder, showToast]);
 
   const upsertAgent = useCallback((agent: Agent): void => {
     if (!workspacePath) return;
@@ -1255,6 +1256,29 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setFolders(computeFoldersSnapshot(agents));
   }, [agents, folderPaths, computeFoldersSnapshot]);
+
+  // After agents load (or reload), drop any open `agent://<id>` tab whose
+  // id no longer resolves to a file. Two scenarios produce stale tabs:
+  //   1. A persisted session restore from the legacy UUID-based scheme
+  //      points at a UUID that no longer matches any agent.
+  //   2. The agent file was deleted in another window and our watcher
+  //      reloaded into a smaller agent set.
+  // Bail out until isLoaded — during the brief reset->load window
+  // `agents` is empty even though tabs may legitimately reference real
+  // (about-to-load) agents, and pruning then would close every chat
+  // tab on every workspace open.
+  useEffect(() => {
+    if (!isLoaded) return;
+    const validIds = new Set(agents.map(a => a.id));
+    const stale: string[] = [];
+    for (const tab of openTabs) {
+      if (tab.type !== 'agent') continue;
+      const id = tab.path.replace(/^agent:\/\//, '');
+      if (!validIds.has(id)) stale.push(tab.id);
+    }
+    if (stale.length === 0) return;
+    for (const tabId of stale) closeTab(tabId);
+  }, [agents, isLoaded, openTabs, closeTab]);
 
   // Load (and reload on workspace switch). Each branch operates on its own
   // captured `workspace` so a stale resolution that lands after we've
