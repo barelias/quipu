@@ -62,6 +62,10 @@ function AppContent() {
   const [, setPluginRevision] = useState(0);
   const toggleEditorModeRef = React.useRef<(() => void) | null>(null);
   const toggleFindRef = React.useRef<(() => void) | null>(null);
+  // Editor mirrors its scroll container's scrollTop into this ref so the pre-switch
+  // snapshot effect below can read the live value even after Editor unmounts (e.g.,
+  // when switching to a chat/agent tab that replaces the Editor with ChatView).
+  const latestScrollTopRef = React.useRef<number | null>(null);
   const {
     workspacePath, showFolderPicker, selectFolder, cancelFolderPicker, revealFolder, openFolder,
   } = useFileSystem();
@@ -115,7 +119,7 @@ function AppContent() {
       // Only snapshot here if Editor is about to unmount (non-Editor tab)
       // For Editor-to-Editor switches, Editor.jsx handles the snapshot internally
       if (isNewTabNonEditor && editorInstance && !editorInstance.isDestroyed) {
-        snapshotTab(prevId, editorInstance.getJSON(), 0);
+        snapshotTab(prevId, editorInstance.getJSON(), latestScrollTopRef.current ?? 0);
       }
     }
   }, [activeTabId, editorInstance, snapshotTab, openTabs]);
@@ -928,6 +932,7 @@ function AppContent() {
                         onRawModeChange={setEditorRawMode}
                         onToggleEditorModeRef={toggleEditorModeRef}
                         onToggleFindRef={toggleFindRef}
+                        latestScrollTopRef={latestScrollTopRef}
                         activeFile={activeFile}
                         activeTabId={activeTabId}
                         activeTab={activeTab}

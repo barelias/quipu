@@ -84,6 +84,10 @@ interface EditorProps {
     onRawModeChange: (isRaw: boolean) => void;
     onToggleEditorModeRef: React.MutableRefObject<(() => void) | null>;
     onToggleFindRef: React.MutableRefObject<(() => void) | null>;
+    // Editor writes the scroll container's current scrollTop here on every scroll event,
+    // so callers (e.g., App.tsx's pre-switch snapshot effect) can read the latest value
+    // even after Editor unmounts and editorScrollRef detaches.
+    latestScrollTopRef?: React.MutableRefObject<number | null>;
     activeFile: { path: string; name: string; content: string | JSONContent | null; isQuipu: boolean } | null;
     activeTabId: string | null;
     activeTab: Tab | null;
@@ -165,6 +169,7 @@ const ToolbarSeparator: React.FC = () => <div className="editor-toolbar-separato
 
 const Editor: React.FC<EditorProps> = ({
     onEditorReady, onContentChange, onRawModeChange, onToggleEditorModeRef, onToggleFindRef,
+    latestScrollTopRef,
     activeFile, activeTabId, activeTab, snapshotTab,
     workspacePath, openFile, revealFolder,
     updateFrontmatter, addFrontmatterProperty, removeFrontmatterProperty,
@@ -339,6 +344,18 @@ const Editor: React.FC<EditorProps> = ({
         el.addEventListener('wheel', handler, { passive: false });
         return () => el.removeEventListener('wheel', handler);
     }, [handleZoomIn, handleZoomOut]);
+
+    // Mirror the scroll container's current scrollTop into latestScrollTopRef on every
+    // user scroll, so callers can read the value after this Editor unmounts (e.g.,
+    // switching to ChatView). Don't write on mount: a freshly mounted Editor has
+    // scrollTop=0, which would clobber a value previously stored for the active tab.
+    useEffect(() => {
+        const el = editorScrollRef.current;
+        if (!el || !latestScrollTopRef) return;
+        const handler = () => { latestScrollTopRef.current = el.scrollTop; };
+        el.addEventListener('scroll', handler, { passive: true });
+        return () => el.removeEventListener('scroll', handler);
+    }, [latestScrollTopRef]);
 
     // Detect if floating comments have space and track their fixed left position
     useEffect(() => {
@@ -844,7 +861,7 @@ const Editor: React.FC<EditorProps> = ({
         // Snapshot previous tab before switching (not on reload of same tab)
         const prevTabId = loadedTabRef.current ? loadedTabRef.current.split(':')[0] : null;
         if (prevTabId && prevTabId !== activeTabId && snapshotTab) {
-            snapshotTab(prevTabId, editor.getJSON(), 0);
+            snapshotTab(prevTabId, editor.getJSON(), editorScrollRef.current?.scrollTop ?? 0);
         }
 
         loadedTabRef.current = tabKey;
@@ -886,6 +903,15 @@ const Editor: React.FC<EditorProps> = ({
                     isLoadingContentRef.current = false;
                     if (editor && !editor.isDestroyed) {
                         extractComments(editor);
+                    }
+                    // Restore scroll position for the freshly loaded tab. Always assign
+                    // (even when 0): on Editor↔Editor switches the scroll container is
+                    // reused and retains the previous tab's scrollTop, so we must reset
+                    // it explicitly when the new tab's saved scroll is 0.
+                    if (editorScrollRef.current) {
+                        const scroll = activeTab?.scrollPosition ?? 0;
+                        editorScrollRef.current.scrollTop = scroll;
+                        if (latestScrollTopRef) latestScrollTopRef.current = scroll;
                     }
                 });
             });
