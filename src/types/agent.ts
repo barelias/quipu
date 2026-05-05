@@ -16,6 +16,16 @@ export type AgentKind = 'agent' | 'chat';
 export interface Agent {
   id: string;
   name: string;
+  /**
+   * Filesystem slug used to derive the on-disk filename for this agent
+   * (e.g. `frame-responder` -> `frame-responder.json`). Required as of
+   * Unit 6: AgentContext computes the canonical id from `folder + '/' + slug`
+   * and routes saves through `agentFileStore`, which uses this directly
+   * for the on-disk filename. Mutators auto-derive a slug from the
+   * agent's name when one isn't explicitly supplied — no callsite should
+   * need to slugify by hand.
+   */
+  slug: string;
   /** 'agent' = full configuration, opens editor on create. 'chat' = lightweight, opens chat directly. */
   kind: AgentKind;
   systemPrompt: string;
@@ -103,6 +113,15 @@ export interface AgentSession {
 export interface Repo {
   id: string;
   name: string;
+  /**
+   * Filesystem slug used to derive the on-disk filename for this repo
+   * (e.g. `quipu` -> `quipu.json`). Required as of Unit 7: RepoContext
+   * computes the canonical id from `folder + '/' + slug` and routes saves
+   * through `repoFileStore`, which uses this directly for the on-disk
+   * filename. Mutators auto-derive a slug from the repo's name when one
+   * isn't explicitly supplied — no callsite should need to slugify by hand.
+   */
+  slug: string;
   url: string;
   folder?: string;
   localClonePath?: string;

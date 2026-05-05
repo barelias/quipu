@@ -1,77 +1,77 @@
+/**
+ * resumeSession tests — the public API didn't change, but the seeding
+ * path did: persisted session transcripts now come from `sessionCache`
+ * rather than the storage-keys layer.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React, { useState } from 'react';
 import { render, act, waitFor } from '@testing-library/react';
-import type { Agent } from '@/types/agent';
+import type { Agent, AgentSession } from '@/types/agent';
 
-// In-memory storage fake — same shape used by the other AgentContext tests.
-vi.mock('../services/storageService', () => {
-  const store = new Map<string, unknown>();
-  const fake = {
-    get: vi.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
-    set: vi.fn(async (key: string, value: unknown) => {
-      if (value === null || value === undefined) {
-        store.delete(key);
-      } else {
-        store.set(key, value);
-      }
-    }),
-    __store: store,
-    __reset: () => { store.clear(); },
-  };
-  return { default: fake, isElectronRuntime: () => false };
-});
+const hoisted = vi.hoisted(() => ({
+  agentFileStore: {
+    loadAllAgents: vi.fn(),
+    loadAllFolders: vi.fn(),
+    saveAgent: vi.fn(),
+    deleteAgent: vi.fn(),
+    renameFolder: vi.fn(),
+    deleteFolder: vi.fn(),
+    createFolder: vi.fn(),
+  },
+  sessionCache: {
+    loadSession: vi.fn(),
+    saveSession: vi.fn(),
+    deleteSession: vi.fn(),
+    renameSession: vi.fn(),
+    workspaceHash: vi.fn(),
+  },
+}));
+const mockAgentFileStore = hoisted.agentFileStore;
+const mockSessionCache = hoisted.sessionCache;
+
+vi.mock('../services/agentFileStore', () => hoisted.agentFileStore);
+vi.mock('../services/sessionCache', () => hoisted.sessionCache);
+vi.mock('../services/quipuFileStore', () => ({
+  watchDirRecursive: () => () => {},
+}));
+vi.mock('../services/legacyImport', () => ({
+  importLegacyDataForWorkspace: vi.fn(async () => ({ imported: 0, errors: 0 })),
+}));
 
 let currentWorkspacePath: string | null = '/foo';
+vi.mock('../context/FileSystemContext', () => ({
+  useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
+}));
 
-vi.mock('../context/FileSystemContext', () => {
-  return {
-    useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
-  };
-});
+vi.mock('../context/RepoContext', () => ({
+  useRepo: () => ({
+    cloneRepoForAgent: vi.fn(async () => '/fake/clone'),
+    repos: [],
+  }),
+}));
 
-vi.mock('../context/RepoContext', () => {
-  return {
-    useRepo: () => ({
-      cloneRepoForAgent: vi.fn(async () => '/fake/clone'),
-      repos: [],
-    }),
-  };
-});
+vi.mock('../context/TabContext', () => ({
+  useTab: () => ({
+    renameTabsByPath: vi.fn(),
+    renameTabPath: vi.fn(),
+    openTabs: [],
+    closeTab: vi.fn(),
+  }),
+}));
 
-vi.mock('../context/TabContext', () => {
-  return {
-    useTab: () => ({ renameTabsByPath: vi.fn() }),
-  };
-});
+vi.mock('../components/ui/Toast', () => ({
+  useToast: () => ({ showToast: vi.fn() }),
+}));
 
-vi.mock('../components/ui/Toast', () => {
-  return {
-    useToast: () => ({ showToast: vi.fn() }),
-  };
-});
-
-// Drive `isElectronAgentRuntime` and `startSession` per-test so we can
-// simulate Electron-vs-browser and observe spawn calls + arguments.
 let runtimeIsElectron = true;
 const startSessionMock = vi.fn();
+vi.mock('../services/agentRuntime', () => ({
+  isElectronAgentRuntime: () => runtimeIsElectron,
+  startSession: (...args: unknown[]) => startSessionMock(...args),
+}));
 
-vi.mock('../services/agentRuntime', () => {
-  return {
-    isElectronAgentRuntime: () => runtimeIsElectron,
-    startSession: (...args: unknown[]) => startSessionMock(...args),
-  };
-});
-
-import storageService from '../services/storageService';
-import { agentsKey, agentSessionsKey, migrationFlagKey } from '../services/workspaceKeys';
 import { AgentProvider, useAgent } from '../context/AgentContext';
-
-const fakeStorage = storageService as unknown as {
-  get: ReturnType<typeof vi.fn>;
-  set: ReturnType<typeof vi.fn>;
-  __store: Map<string, unknown>;
-  __reset: () => void;
-};
 
 interface ResumeApi {
   resumeSession: (id: string) => Promise<void>;
@@ -107,6 +107,7 @@ function makeAgent(id: string, overrides: Partial<Agent> = {}): Agent {
   const now = new Date().toISOString();
   return {
     id,
+    slug: id,
     name: id,
     kind: 'agent',
     systemPrompt: '',
@@ -129,23 +130,23 @@ function makeFakeHandle() {
 }
 
 beforeEach(() => {
-  fakeStorage.__reset();
-  fakeStorage.get.mockClear();
-  fakeStorage.set.mockClear();
+  for (const m of Object.values(mockAgentFileStore)) m.mockReset();
+  for (const m of Object.values(mockSessionCache)) m.mockReset();
+  mockAgentFileStore.loadAllAgents.mockResolvedValue([]);
+  mockAgentFileStore.loadAllFolders.mockResolvedValue([]);
+  mockAgentFileStore.saveAgent.mockResolvedValue('');
+  mockSessionCache.loadSession.mockResolvedValue(null);
   api = null;
   currentWorkspacePath = '/foo';
   runtimeIsElectron = true;
   startSessionMock.mockReset();
   startSessionMock.mockImplementation(async () => makeFakeHandle());
-  // Skip migration-from-globals noise.
-  fakeStorage.__store.set(migrationFlagKey(), true);
 });
 
-async function renderWith(seededAgents: Agent[], seededSessions: Record<string, unknown> = {}) {
-  fakeStorage.__store.set(agentsKey('/foo'), seededAgents);
-  if (Object.keys(seededSessions).length > 0) {
-    fakeStorage.__store.set(agentSessionsKey('/foo'), seededSessions);
-  }
+async function renderWith(seededAgents: Agent[], sessionByAgent: Record<string, AgentSession> = {}) {
+  mockAgentFileStore.loadAllAgents.mockResolvedValue(seededAgents);
+  mockSessionCache.loadSession.mockImplementation(async (_w: string, id: string) => sessionByAgent[id] ?? null);
+
   const result = render(
     <Harness initialPath="/foo">
       <ApiProbe />
@@ -154,20 +155,21 @@ async function renderWith(seededAgents: Agent[], seededSessions: Record<string, 
   await waitFor(() => {
     expect(result.getByTestId('isLoaded').textContent).toBe('true');
   });
+  // Flush the post-render `sessionsRef = sessions` sync effect so the
+  // first resumeSession reads the freshly-loaded transcript.
+  await act(async () => { await Promise.resolve(); });
   expect(api).not.toBeNull();
   return result;
 }
 
 describe('AgentContext.resumeSession', () => {
-  it('happy path: agent has stored claudeSessionId → startSession called with resumeSessionId', async () => {
+  it('happy path: agent has stored claudeSessionId from sessionCache → startSession called with resumeSessionId', async () => {
     await renderWith(
       [makeAgent('a1')],
       { 'a1': { agentId: 'a1', messages: [], updatedAt: '2026-01-01T00:00:00Z', claudeSessionId: 'claude-abc' } },
     );
 
-    await act(async () => {
-      await api!.resumeSession('a1');
-    });
+    await act(async () => { await api!.resumeSession('a1'); });
 
     expect(startSessionMock).toHaveBeenCalledTimes(1);
     const [agentIdArg, opts] = startSessionMock.mock.calls[0];
@@ -178,9 +180,7 @@ describe('AgentContext.resumeSession', () => {
   it('happy path: agent has no stored session → startSession called with resumeSessionId === undefined', async () => {
     await renderWith([makeAgent('fresh')]);
 
-    await act(async () => {
-      await api!.resumeSession('fresh');
-    });
+    await act(async () => { await api!.resumeSession('fresh'); });
 
     expect(startSessionMock).toHaveBeenCalledTimes(1);
     const [, opts] = startSessionMock.mock.calls[0];
@@ -191,9 +191,7 @@ describe('AgentContext.resumeSession', () => {
     runtimeIsElectron = false;
     await renderWith([makeAgent('browser-agent')]);
 
-    await act(async () => {
-      await api!.resumeSession('browser-agent');
-    });
+    await act(async () => { await api!.resumeSession('browser-agent'); });
 
     expect(startSessionMock).not.toHaveBeenCalled();
   });
@@ -201,32 +199,18 @@ describe('AgentContext.resumeSession', () => {
   it('agent does not exist → no crash, no spawned process', async () => {
     await renderWith([makeAgent('exists')]);
 
-    await act(async () => {
-      await api!.resumeSession('does-not-exist');
-    });
+    await act(async () => { await api!.resumeSession('does-not-exist'); });
 
     expect(startSessionMock).not.toHaveBeenCalled();
-    // Also did not append any error-role message anywhere — the missing-agent
-    // case is silent because there is no session to surface an error in.
     expect(api!.getSessionMessages('does-not-exist')).toEqual([]);
   });
 
-  it('sequential rapid resumeSession calls for the same agent → only one subprocess spawns (handle cache)', async () => {
+  it('sequential rapid resumeSession calls for the same agent → only one subprocess spawns', async () => {
     await renderWith([makeAgent('cached')]);
 
-    // Real-world rapid tab switches are sequential: each ChatView mount fires
-    // its mount effect once, the previous mount's resume already settled. The
-    // sessionHandlesRef.current.has(agentId) check inside ensureSession is
-    // what prevents the second-and-onward calls from re-spawning.
-    await act(async () => {
-      await api!.resumeSession('cached');
-    });
-    await act(async () => {
-      await api!.resumeSession('cached');
-    });
-    await act(async () => {
-      await api!.resumeSession('cached');
-    });
+    await act(async () => { await api!.resumeSession('cached'); });
+    await act(async () => { await api!.resumeSession('cached'); });
+    await act(async () => { await api!.resumeSession('cached'); });
 
     expect(startSessionMock).toHaveBeenCalledTimes(1);
   });
@@ -238,9 +222,7 @@ describe('AgentContext.resumeSession', () => {
 
     await renderWith([makeAgent('boom')]);
 
-    await act(async () => {
-      await api!.resumeSession('boom');
-    });
+    await act(async () => { await api!.resumeSession('boom'); });
 
     const messages = api!.getSessionMessages('boom');
     expect(messages.some(m => m.role === 'error' && m.body.includes('spawn failed'))).toBe(true);
@@ -248,37 +230,14 @@ describe('AgentContext.resumeSession', () => {
 
   it('error path: startSession throws non-Error → string message still surfaces', async () => {
     startSessionMock.mockImplementationOnce(async () => {
-      // Some lower layers reject with strings rather than Error instances.
       throw 'plain string failure';
     });
 
     await renderWith([makeAgent('strerr')]);
 
-    await act(async () => {
-      await api!.resumeSession('strerr');
-    });
+    await act(async () => { await api!.resumeSession('strerr'); });
 
     const messages = api!.getSessionMessages('strerr');
     expect(messages.some(m => m.role === 'error' && m.body === 'plain string failure')).toBe(true);
-  });
-
-  it('integration: workspace switch clearing sessions means a fresh resumeSession spawns again', async () => {
-    // Mount with a stored claudeSessionId so the first resume uses --resume.
-    await renderWith(
-      [makeAgent('persistent')],
-      { 'persistent': { agentId: 'persistent', messages: [], updatedAt: '2026-01-01T00:00:00Z', claudeSessionId: 'sid-1' } },
-    );
-
-    await act(async () => {
-      await api!.resumeSession('persistent');
-    });
-    expect(startSessionMock).toHaveBeenCalledTimes(1);
-    expect((startSessionMock.mock.calls[0][1] as { resumeSessionId?: string }).resumeSessionId).toBe('sid-1');
-
-    // Calling resume again with the cached handle should NOT respawn.
-    await act(async () => {
-      await api!.resumeSession('persistent');
-    });
-    expect(startSessionMock).toHaveBeenCalledTimes(1);
   });
 });

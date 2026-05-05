@@ -1,24 +1,41 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import storage from '../services/storageService';
-import fs from '../services/fileSystem';
 import { startSession, isElectronAgentRuntime, type AgentSessionHandle } from '../services/agentRuntime';
 import { useFileSystem } from './FileSystemContext';
 import { useRepo } from './RepoContext';
 import { useTab } from './TabContext';
 import { useToast } from '../components/ui/Toast';
-import { agentsKey, agentSessionsKey, agentFoldersKey } from '../services/workspaceKeys';
-import { migrateGlobalKeysIfNeeded } from '../services/workspaceKeysMigration';
+import * as agentFileStore from '../services/agentFileStore';
+import * as sessionCache from '../services/sessionCache';
+import { watchDirRecursive } from '../services/quipuFileStore';
+import { importLegacyDataForWorkspace } from '../services/legacyImport';
+import { slugify, normalizeFolder, disambiguateSlug, joinId } from '../services/slug';
 import type { Agent, AgentMessage, AgentSession, AgentToolCall, AgentPermissionRequest, AgentImageAttachment } from '@/types/agent';
 
 type SessionMap = Record<string, AgentSession>;
 
-/** Declared folder names per kind — lets users keep empty folders. */
+/** Declared folder names per kind — lets users keep empty folders.
+ *
+ *  Derived now from the file store (`loadAllFolders` + the loaded agents'
+ *  kinds). The `chats`/`agents` partition keeps the existing public API
+ *  shape stable for Unit 9's panels — folders containing no agents at all
+ *  appear in both lists (treated as "declared but empty"). */
 export interface AgentFolders {
   chats: string[];
   agents: string[];
 }
 
 const EMPTY_FOLDERS: AgentFolders = { chats: [], agents: [] };
+
+/** How long a path written by THIS window suppresses a watcher reload.
+ *  Echo storms surface as a watcher event firing milliseconds after our
+ *  own write completes; longer than ~300ms and we're outside the OS
+ *  buffer for coalesced inotify events. */
+const ECHO_TTL_MS = 300;
+
+/** Debounce window for session-cache writes during a streaming turn. The
+ *  cache is durability, not correctness — saving on every token would
+ *  thrash the disk for no observable benefit. */
+const SESSION_SAVE_DEBOUNCE_MS = 500;
 
 /** Composer draft state carried per-agent across tab switches. */
 export interface AgentDraft {
@@ -283,13 +300,69 @@ function buildQuipuContextPrompt(
   return lines.join('\n');
 }
 
+/**
+ * Partition the file-store's flat folder list into the legacy `{ chats, agents }`
+ * shape consumed by the Agents panel. A folder appears under a kind if at
+ * least one of its agents has that kind; folders with no agents (declared
+ * via `.folder.json` markers) appear in both, since the file store doesn't
+ * track which kind an empty folder "belongs" to.
+ */
+function partitionFoldersByKind(
+  folderPaths: string[],
+  agentList: Agent[],
+): AgentFolders {
+  const chatSet = new Set<string>();
+  const agentSet = new Set<string>();
+  // Pre-index agents by folder for an O(F+A) walk instead of O(F*A).
+  const byFolder = new Map<string, Set<'agent' | 'chat'>>();
+  for (const a of agentList) {
+    const key = a.folder ?? '';
+    let kinds = byFolder.get(key);
+    if (!kinds) {
+      kinds = new Set();
+      byFolder.set(key, kinds);
+    }
+    kinds.add(a.kind);
+  }
+  for (const path of folderPaths) {
+    if (path === '') continue;
+    const kinds = byFolder.get(path);
+    if (!kinds || kinds.size === 0) {
+      // Empty folder — show in both lists so the UI can declare it
+      // under whichever section the user is browsing.
+      chatSet.add(path);
+      agentSet.add(path);
+      continue;
+    }
+    if (kinds.has('chat')) chatSet.add(path);
+    if (kinds.has('agent')) agentSet.add(path);
+  }
+  // Also surface folders that exist only because of agents (no marker
+  // file) — partitionFoldersByKind is called with the file-store output
+  // which already includes these, so this is a defensive sweep for any
+  // missed cases.
+  for (const a of agentList) {
+    const key = a.folder ?? '';
+    if (key === '') continue;
+    if (a.kind === 'chat') chatSet.add(key);
+    else agentSet.add(key);
+  }
+  return {
+    chats: Array.from(chatSet).sort(),
+    agents: Array.from(agentSet).sort(),
+  };
+}
+
 export function AgentProvider({ children }: { children: React.ReactNode }) {
   const { workspacePath } = useFileSystem();
   const { cloneRepoForAgent, repos } = useRepo();
-  const { renameTabsByPath } = useTab();
+  const { renameTabsByPath, renameTabPath, openTabs, closeTab } = useTab();
   const { showToast } = useToast();
 
+  // === State (per CLAUDE.md hook ordering: state first, callbacks, effects last) ===
+
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [folderPaths, setFolderPaths] = useState<string[]>([]);
   const [folders, setFolders] = useState<AgentFolders>(EMPTY_FOLDERS);
   const [sessions, setSessions] = useState<SessionMap>({});
   const [activeTurns, setActiveTurns] = useState<Record<string, boolean>>({});
@@ -312,144 +385,182 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   const agentsRef = useRef<Agent[]>(agents);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
 
-  // Tracks which workspacePath the in-memory `agents`/`sessions`/`folders`
-  // belong to. Synchronously cleared at the top of the load effect (before the
-  // setStates that reset state) and synchronously set when a load completes —
-  // both done via this ref rather than a state value because save effects need
-  // a same-render barrier. Without this, the save effects would fire during
-  // the workspace transition (when their `workspacePath` dep changed but
-  // `agents`/`sessions`/`folders` still hold the previous workspace's data),
-  // writing the previous workspace's data into the new workspace's storage
-  // key — a silent corruption of the new workspace.
+  const folderPathsRef = useRef<string[]>(folderPaths);
+  useEffect(() => { folderPathsRef.current = folderPaths; }, [folderPaths]);
+
+  // Per-agent debounce timers for the session-cache write. Clearing the
+  // pending timer on overwrite means rapid token streams collapse to a
+  // single write at the end of a quiet ~500ms window.
+  const sessionSaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Echo-suppression: when this window writes to a path, the watcher
+  // immediately fires for that path. Tracking expiry timestamps lets us
+  // ignore those self-induced events without blocking real cross-window
+  // writes for more than a few hundred milliseconds.
+  const recentWriteTimesRef = useRef<Map<string, number>>(new Map());
+
+  /** Mark the given absolute path as "just written by us" for ECHO_TTL_MS.
+   *  Garbage-collects any expired entries on the way in. */
+  const markRecentWrite = useCallback((absPath: string): void => {
+    const now = Date.now();
+    const map = recentWriteTimesRef.current;
+    // Periodic GC of stale entries — cheap because the map only grows
+    // by O(workspace mutations / second).
+    for (const [k, expiry] of map) {
+      if (expiry <= now) map.delete(k);
+    }
+    map.set(absPath, now + ECHO_TTL_MS);
+  }, []);
+
+  /** True if `absPath` is one we wrote within ECHO_TTL_MS. Consumes the entry
+   *  on hit so a single write only suppresses one watcher event. */
+  const isRecentEcho = useCallback((absPath: string): boolean => {
+    const expiry = recentWriteTimesRef.current.get(absPath);
+    if (expiry === undefined) return false;
+    if (expiry <= Date.now()) {
+      recentWriteTimesRef.current.delete(absPath);
+      return false;
+    }
+    recentWriteTimesRef.current.delete(absPath);
+    return true;
+  }, []);
+
+  // Tracks which workspacePath the in-memory state belongs to. Used by the
+  // file watcher reload to bail out if we've moved on to another workspace
+  // since the event arrived. Set inside the load effect, never read by
+  // saves (saves are imperative now and happen synchronously, so they
+  // can't outlive the workspace they ran under).
   const loadedWorkspaceRef = useRef<string | null>(null);
 
-  // Load (and reload on workspace switch). Storage keys are scoped to the
-  // current workspace; while `workspacePath` is null we present empty state and
-  // never write, so a no-workspace window cannot accidentally clobber data.
-  // The `cancelled` flag protects against rapid workspace switches: a stale
-  // load that resolves after the user has already moved to a different
-  // workspace must not overwrite the new workspace's just-loaded state.
-  useEffect(() => {
-    let cancelled = false;
-
-    // Synchronously invalidate the loaded-workspace barrier so save effects
-    // that fire later in this same effect cycle (because their `workspacePath`
-    // dep just changed) bail out instead of writing the previous workspace's
-    // in-memory data into the new workspace's storage key.
-    loadedWorkspaceRef.current = null;
-
-    // Reset on every workspace change. Sessions are killed because their
-    // handles point at the previous workspace's `cwd` and would mutate the
-    // wrong tree if the user resumed them.
-    setIsLoaded(false);
-    setAgents([]);
-    setFolders(EMPTY_FOLDERS);
-    setSessions({});
-    setActiveTurns({});
-    streamingMessageRef.current.clear();
-    // Per-chat drafts belong to the previous workspace's agents; drop them so
-    // the new workspace's chats start with empty composers.
-    draftsRef.current.clear();
-    const handles = sessionHandlesRef.current;
-    sessionHandlesRef.current = new Map();
-    for (const handle of handles.values()) {
-      try { void handle.stop(); } catch { /* ignore */ }
-    }
-
-    if (!workspacePath) {
-      return () => { cancelled = true; };
-    }
-
-    const aKey = agentsKey(workspacePath);
-    const sKey = agentSessionsKey(workspacePath);
-    const fKey = agentFoldersKey(workspacePath);
-
-    (async () => {
-      try {
-        await migrateGlobalKeysIfNeeded(workspacePath);
-      } catch (err) {
-        // Migration failure must not block workspace open. The corresponding
-        // scoped keys will simply be empty on first read; the user can re-key
-        // by hand if needed.
-        console.warn('[agent] migrateGlobalKeysIfNeeded failed', err);
-      }
-      if (cancelled) return;
-
-      const [savedAgents, savedSessions, savedFolders] = await Promise.all([
-        storage.get(aKey).catch(() => null),
-        storage.get(sKey).catch(() => null),
-        storage.get(fKey).catch(() => null),
-      ]);
-      if (cancelled) return;
-
-      if (savedFolders && typeof savedFolders === 'object') {
-        const f = savedFolders as Partial<AgentFolders>;
-        setFolders({
-          chats: Array.isArray(f.chats) ? f.chats : [],
-          agents: Array.isArray(f.agents) ? f.agents : [],
-        });
-      }
-      if (Array.isArray(savedAgents)) {
-        const normalized = (savedAgents as Partial<Agent>[]).map((a) => ({
-          ...a,
-          kind: a.kind ?? 'agent',
-          bindings: Array.isArray(a.bindings) ? a.bindings : [],
-          permissionMode: a.permissionMode ?? 'default',
-          allowedTools: Array.isArray(a.allowedTools) ? a.allowedTools : undefined,
-        })) as Agent[];
-        setAgents(normalized);
-      }
-      if (savedSessions && typeof savedSessions === 'object') {
-        setSessions(savedSessions as SessionMap);
-      }
-      // Mark this workspace as the source-of-truth BEFORE flipping isLoaded so
-      // the save effects (which fire on the resulting render) see the matching
-      // ref and write back to the correct key.
-      loadedWorkspaceRef.current = workspacePath;
-      setIsLoaded(true);
-    })();
-
-    return () => { cancelled = true; };
-  }, [workspacePath]);
-
-  // Save effects guard on `isLoaded && workspacePath` AND on the
-  // `loadedWorkspaceRef` matching the current workspacePath. The ref check is
-  // what prevents the cross-workspace data corruption described above: if the
-  // workspacePath dep changed but the new workspace's load hasn't completed
-  // (or is in flight), the ref is null and the save is skipped, so the
-  // previous workspace's `agents` value never gets written into the new
-  // workspace's storage key.
-  useEffect(() => {
-    if (!isLoaded || !workspacePath) return;
-    if (loadedWorkspaceRef.current !== workspacePath) return;
-    storage.set(agentsKey(workspacePath), agents).catch(() => {});
-  }, [agents, isLoaded, workspacePath]);
-
-  useEffect(() => {
-    if (!isLoaded || !workspacePath) return;
-    if (loadedWorkspaceRef.current !== workspacePath) return;
-    storage.set(agentSessionsKey(workspacePath), sessions).catch(() => {});
-  }, [sessions, isLoaded, workspacePath]);
-
-  useEffect(() => {
-    if (!isLoaded || !workspacePath) return;
-    if (loadedWorkspaceRef.current !== workspacePath) return;
-    storage.set(agentFoldersKey(workspacePath), folders).catch(() => {});
-  }, [folders, isLoaded, workspacePath]);
+  // === Leaf callbacks ===
 
   const getAgent = useCallback((id: string) => agents.find(a => a.id === id), [agents]);
 
-  const upsertAgent = useCallback((agent: Agent) => {
-    setAgents(prev => {
-      const idx = prev.findIndex(a => a.id === agent.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = agent;
-        return next;
-      }
-      return [...prev, agent];
-    });
+  /**
+   * Compute a slug for `agent` that won't collide with any sibling under the
+   * same folder. Used by `upsertAgent` whenever a slug isn't supplied or
+   * supplied-but-colliding (e.g. on a rename into an existing folder).
+   *
+   * `selfId` is the id we should ignore when checking for collisions —
+   * critical when re-saving an agent in place (its own previous slug
+   * shouldn't be considered a collision against itself).
+   */
+  const resolveSlugForFolder = useCallback((
+    agentList: Agent[],
+    folder: string,
+    desiredSlug: string,
+    fallbackName: string,
+    fallbackKind: 'agent' | 'chat',
+    selfId: string | null,
+  ): string => {
+    const cleaned = desiredSlug.trim() || slugify(fallbackName, fallbackKind);
+    const used = new Set<string>();
+    for (const other of agentList) {
+      if (other.id === selfId) continue;
+      const otherFolder = other.folder ?? '';
+      if (otherFolder !== folder) continue;
+      const otherSlug = other.slug ?? '';
+      if (otherSlug !== '') used.add(otherSlug);
+    }
+    return disambiguateSlug(cleaned, used);
   }, []);
+
+  /** Build the next folders snapshot from a (possibly hypothetical) agents
+   *  list and the current declared-folder paths. Pure — no setState. */
+  const computeFoldersSnapshot = useCallback((agentList: Agent[]): AgentFolders => {
+    return partitionFoldersByKind(folderPathsRef.current, agentList);
+  }, []);
+
+  // === Imperative file-store ops with state sync ===
+
+  /**
+   * Write `agent` to disk and update React state. Slug+folder are
+   * normalized + disambiguated against the live agent list before the
+   * save, so callers don't have to think about collisions. `previousId`
+   * tells the file store to delete the old file when slug or folder
+   * changed.
+   *
+   * Tabs that referenced the old id keep working at the visible-name
+   * level via `renameTabsByPath` — Unit 11 will repath them properly.
+   */
+  const persistAgent = useCallback(async (
+    workspace: string,
+    incoming: Agent,
+    previousId: string | null,
+  ): Promise<Agent | null> => {
+    const folder = normalizeFolder(incoming.folder ?? '');
+    const desiredSlug = (incoming.slug ?? '').trim() || slugify(incoming.name, incoming.kind);
+    const slug = resolveSlugForFolder(
+      agentsRef.current,
+      folder,
+      desiredSlug,
+      incoming.name,
+      incoming.kind,
+      previousId,
+    );
+    const newId = joinId(folder, slug);
+    const persisted: Agent = {
+      ...incoming,
+      id: newId,
+      slug,
+      folder: folder === '' ? undefined : folder,
+    };
+
+    try {
+      // Mark BOTH the new file (we're about to write it) and the old
+      // file (we may delete it) as recent echoes — the watcher fires
+      // for both create and unlink events.
+      const newAbs = `${workspace}/.quipu/agents/${newId}.json`;
+      markRecentWrite(newAbs);
+      if (previousId !== null && previousId !== newId) {
+        const oldAbs = `${workspace}/.quipu/agents/${previousId}.json`;
+        markRecentWrite(oldAbs);
+      }
+      await agentFileStore.saveAgent(workspace, persisted, previousId ?? undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to save agent: ${message}`, 'error');
+      return null;
+    }
+
+    // State update — replace if any agent shares previousId or newId,
+    // otherwise append. Use the freshest agentsRef snapshot so we don't
+    // lose interleaved updates between the save call and the setState.
+    setAgents(prev => {
+      let replaced = false;
+      const next: Agent[] = [];
+      for (const a of prev) {
+        if (a.id === previousId || a.id === newId) {
+          if (!replaced) {
+            next.push(persisted);
+            replaced = true;
+          }
+          continue;
+        }
+        next.push(a);
+      }
+      if (!replaced) next.push(persisted);
+      return next;
+    });
+
+    // Sync any open tabs. If the id changed (slug rename or folder move),
+    // both the path AND the visible name need to update — the tab path
+    // is `agent://<id>` and stale ids no longer resolve to a file. If
+    // only the name changed, a name-only rename is enough.
+    if (previousId !== null && previousId !== newId) {
+      renameTabPath(`agent://${previousId}`, `agent://${newId}`, persisted.name);
+    } else {
+      renameTabsByPath(`agent://${newId}`, persisted.name);
+    }
+
+    return persisted;
+  }, [markRecentWrite, renameTabPath, renameTabsByPath, resolveSlugForFolder, showToast]);
+
+  const upsertAgent = useCallback((agent: Agent): void => {
+    if (!workspacePath) return;
+    const previous = agentsRef.current.find(a => a.id === agent.id);
+    void persistAgent(workspacePath, agent, previous ? previous.id : null);
+  }, [persistAgent, workspacePath]);
 
   const ensureAgentClones = useCallback(async (agentId: string): Promise<void> => {
     const agent = agentsRef.current.find(a => a.id === agentId);
@@ -471,78 +582,105 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     }
   }, [cloneRepoForAgent, showToast]);
 
-  const moveAgent = useCallback((id: string, patch: { folder?: string; kind?: 'agent' | 'chat' }) => {
+  const moveAgent = useCallback((id: string, patch: { folder?: string; kind?: 'agent' | 'chat' }): void => {
+    if (!workspacePath) return;
+    const existing = agentsRef.current.find(a => a.id === id);
+    if (!existing) return;
     const now = new Date().toISOString();
-    setAgents(prev => prev.map(a => a.id !== id ? a : ({
-      ...a,
-      folder: patch.folder !== undefined ? (patch.folder || undefined) : a.folder,
-      kind: patch.kind ?? a.kind,
+    const updated: Agent = {
+      ...existing,
+      folder: patch.folder !== undefined ? (patch.folder || undefined) : existing.folder,
+      kind: patch.kind ?? existing.kind,
       updatedAt: now,
-    })));
-  }, []);
-
-  const createFolder = useCallback((kind: 'agent' | 'chat', name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setFolders(prev => {
-      const key = kind === 'agent' ? 'agents' : 'chats';
-      if (prev[key].includes(trimmed)) return prev;
-      return { ...prev, [key]: [...prev[key], trimmed] };
-    });
-  }, []);
-
-  const deleteFolder = useCallback((kind: 'agent' | 'chat', name: string) => {
-    const key = kind === 'agent' ? 'agents' : 'chats';
-    setFolders(prev => ({ ...prev, [key]: prev[key].filter(f => f !== name) }));
-    // Move any items of that kind+folder back to root.
-    setAgents(prev => prev.map(a => {
-      if (a.kind !== kind || a.folder !== name) return a;
-      return { ...a, folder: undefined, updatedAt: new Date().toISOString() };
-    }));
-  }, []);
-
-  const renameFolder = useCallback((kind: 'agent' | 'chat', oldName: string, newName: string) => {
-    const trimmed = newName.trim();
-    if (!trimmed || trimmed === oldName) return;
-    const key = kind === 'agent' ? 'agents' : 'chats';
-    setFolders(prev => ({ ...prev, [key]: prev[key].map(f => f === oldName ? trimmed : f) }));
-    setAgents(prev => prev.map(a => {
-      if (a.kind !== kind || a.folder !== oldName) return a;
-      return { ...a, folder: trimmed, updatedAt: new Date().toISOString() };
-    }));
-  }, []);
+    };
+    void persistAgent(workspacePath, updated, existing.id);
+  }, [persistAgent, workspacePath]);
 
   const createChat = useCallback((opts?: { folder?: string; name?: string }): Agent => {
     const now = new Date().toISOString();
+    const name = opts?.name ?? 'New chat';
+    const folder = normalizeFolder(opts?.folder ?? '');
+    const slug = resolveSlugForFolder(
+      agentsRef.current,
+      folder,
+      slugify(name, 'chat'),
+      name,
+      'chat',
+      null,
+    );
+    const id = joinId(folder, slug);
     const chat: Agent = {
-      id: crypto.randomUUID(),
-      name: opts?.name ?? 'New chat',
+      id,
+      slug,
+      name,
       kind: 'chat',
       systemPrompt: '',
       model: 'claude-sonnet-4-5',
       bindings: [],
       permissionMode: 'default',
-      folder: opts?.folder,
+      folder: folder === '' ? undefined : folder,
       createdAt: now,
       updatedAt: now,
     };
-    setAgents(prev => [...prev, chat]);
+    if (workspacePath) {
+      void persistAgent(workspacePath, chat, null);
+    } else {
+      // No workspace yet — at least populate state so the in-memory ID is
+      // returned to the caller. The next `useEffect([workspacePath])`
+      // will reset state, so this is best-effort for the no-workspace
+      // edge case (which the panels guard against by hiding the New
+      // chat button).
+      setAgents(prev => [...prev, chat]);
+    }
     return chat;
-  }, []);
+  }, [persistAgent, resolveSlugForFolder, workspacePath]);
 
-  const killSession = useCallback(async (agentId: string) => {
+  const killSession = useCallback(async (agentId: string): Promise<void> => {
     const handle = sessionHandlesRef.current.get(agentId);
     if (handle) {
       sessionHandlesRef.current.delete(agentId);
       try { await handle.stop(); } catch { /* ignore */ }
     }
+    // Cancel any pending session-cache flush — the agent is going away.
+    const t = sessionSaveTimersRef.current.get(agentId);
+    if (t !== undefined) {
+      clearTimeout(t);
+      sessionSaveTimersRef.current.delete(agentId);
+    }
   }, []);
 
-  const deleteAgent = useCallback((id: string) => {
+  const deleteAgent = useCallback((id: string): void => {
+    if (!workspacePath) return;
     void killSession(id);
-    // Drop any in-memory composer draft for this agent so a future agent that
-    // somehow reuses the id (or just to free the entry) doesn't see stale text.
+    // Drop any in-memory composer draft for this agent so a future agent
+    // that somehow reuses the id (or just to free the entry) doesn't see
+    // stale text.
     draftsRef.current.delete(id);
+
+    // Mark the about-to-be-deleted file for echo suppression.
+    const abs = `${workspacePath}/.quipu/agents/${id}.json`;
+    markRecentWrite(abs);
+
+    // Persist deletion before flipping local state so a watcher fire-back
+    // doesn't re-introduce the agent. Use Promise chaining rather than
+    // await so the public method stays synchronous.
+    void (async () => {
+      try {
+        await agentFileStore.deleteAgent(workspacePath, id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast(`Failed to delete agent: ${message}`, 'error');
+        return;
+      }
+      try {
+        await sessionCache.deleteSession(workspacePath, id);
+      } catch (err) {
+        // Session-cache deletion is best-effort — a missing/lock-held
+        // file shouldn't block the agent removal.
+        console.warn('[agent] deleteAgent: deleteSession failed', err);
+      }
+    })();
+
     setAgents(prev => prev.filter(a => a.id !== id));
     setSessions(prev => {
       if (!prev[id]) return prev;
@@ -550,11 +688,129 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       delete next[id];
       return next;
     });
-  }, [killSession]);
+  }, [killSession, markRecentWrite, showToast, workspacePath]);
+
+  /** Reload agents + folder paths from disk. Used both at workspace open
+   *  and after the file watcher reports a change. The `cancelled` flag
+   *  protects against a workspace switch firing mid-reload — caller
+   *  passes its own cancellation token. */
+  const reloadAgentsAndFolders = useCallback(async (
+    workspace: string,
+    isCancelled: () => boolean,
+  ): Promise<{ agents: Agent[]; folders: string[] } | null> => {
+    try {
+      const [loadedAgents, loadedFolders] = await Promise.all([
+        agentFileStore.loadAllAgents(workspace),
+        agentFileStore.loadAllFolders(workspace),
+      ]);
+      if (isCancelled()) return null;
+      return {
+        agents: loadedAgents,
+        folders: loadedFolders.map(f => f.path),
+      };
+    } catch (err) {
+      console.warn('[agent] reload failed', err);
+      return null;
+    }
+  }, []);
+
+  const createFolder = useCallback((kind: 'agent' | 'chat', name: string): void => {
+    if (!workspacePath) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    let folderPath: string;
+    try {
+      folderPath = normalizeFolder(trimmed);
+    } catch {
+      showToast(`"${trimmed}" is not a valid folder name.`, 'error');
+      return;
+    }
+    if (folderPath === '') return;
+
+    void (async () => {
+      try {
+        const markerAbs = `${workspacePath}/.quipu/agents/${folderPath}/.folder.json`;
+        markRecentWrite(markerAbs);
+        await agentFileStore.createFolder(workspacePath, folderPath, trimmed);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast(`Failed to create folder: ${message}`, 'error');
+        return;
+      }
+      // Reload folders state so the newly-declared folder shows up.
+      // Agents don't change, but loadAllFolders is the source of truth
+      // for the declared list.
+      const result = await reloadAgentsAndFolders(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
+      if (!result) return;
+      setAgents(result.agents);
+      setFolderPaths(result.folders);
+      // The kind argument is currently unused — both lists derive from
+      // agent contents and the declared-paths set. We keep it in the
+      // signature for Unit 9's UI, which may want to bias an empty
+      // folder toward one section.
+      void kind;
+    })();
+  }, [markRecentWrite, reloadAgentsAndFolders, showToast, workspacePath]);
+
+  const deleteFolder = useCallback((kind: 'agent' | 'chat', name: string): void => {
+    if (!workspacePath) return;
+    let folderPath: string;
+    try {
+      folderPath = normalizeFolder(name);
+    } catch {
+      showToast(`"${name}" is not a valid folder name.`, 'error');
+      return;
+    }
+    if (folderPath === '') return;
+
+    void (async () => {
+      try {
+        await agentFileStore.deleteFolder(workspacePath, folderPath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast(`Failed to delete folder: ${message}`, 'error');
+        return;
+      }
+      const result = await reloadAgentsAndFolders(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
+      if (!result) return;
+      setAgents(result.agents);
+      setFolderPaths(result.folders);
+      void kind;
+    })();
+  }, [reloadAgentsAndFolders, showToast, workspacePath]);
+
+  const renameFolder = useCallback((kind: 'agent' | 'chat', oldName: string, newName: string): void => {
+    if (!workspacePath) return;
+    let oldPath: string;
+    let newPath: string;
+    try {
+      oldPath = normalizeFolder(oldName);
+      newPath = normalizeFolder(newName);
+    } catch {
+      showToast('Invalid folder name.', 'error');
+      return;
+    }
+    if (oldPath === '' || newPath === '' || oldPath === newPath) return;
+
+    void (async () => {
+      try {
+        await agentFileStore.renameFolder(workspacePath, oldPath, newPath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast(`Failed to rename folder: ${message}`, 'error');
+        return;
+      }
+      const result = await reloadAgentsAndFolders(workspacePath, () => loadedWorkspaceRef.current !== workspacePath);
+      if (!result) return;
+      setAgents(result.agents);
+      setFolderPaths(result.folders);
+      void kind;
+    })();
+  }, [reloadAgentsAndFolders, showToast, workspacePath]);
 
   const getSession = useCallback((agentId: string) => sessions[agentId], [sessions]);
 
-  const clearSession = useCallback((agentId: string) => {
+  const clearSession = useCallback((agentId: string): void => {
     void killSession(agentId);
     setSessions(prev => {
       if (!prev[agentId]) return prev;
@@ -562,11 +818,16 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       delete next[agentId];
       return next;
     });
-  }, [killSession]);
+    if (workspacePath) {
+      void sessionCache.deleteSession(workspacePath, agentId).catch(err => {
+        console.warn('[agent] clearSession: deleteSession failed', err);
+      });
+    }
+  }, [killSession, workspacePath]);
 
   const isTurnActive = useCallback((agentId: string) => !!activeTurns[agentId], [activeTurns]);
 
-  const setTurnActive = useCallback((agentId: string, active: boolean) => {
+  const setTurnActive = useCallback((agentId: string, active: boolean): void => {
     setActiveTurns(prev => {
       if (!!prev[agentId] === active) return prev;
       const next = { ...prev };
@@ -575,7 +836,26 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const appendMessage = useCallback((agentId: string, message: AgentMessage) => {
+  /** Schedule a debounced session-cache write for `agentId`. Subsequent
+   *  calls within SESSION_SAVE_DEBOUNCE_MS reset the timer so a streaming
+   *  burst flushes once at the end of the quiet window. */
+  const scheduleSessionSave = useCallback((agentId: string): void => {
+    if (!workspacePath) return;
+    const timers = sessionSaveTimersRef.current;
+    const prev = timers.get(agentId);
+    if (prev !== undefined) clearTimeout(prev);
+    const handle = setTimeout(() => {
+      timers.delete(agentId);
+      const session = sessionsRef.current[agentId];
+      if (!session) return;
+      void sessionCache.saveSession(workspacePath, agentId, session).catch(err => {
+        console.warn('[agent] saveSession failed', err);
+      });
+    }, SESSION_SAVE_DEBOUNCE_MS);
+    timers.set(agentId, handle);
+  }, [workspacePath]);
+
+  const appendMessage = useCallback((agentId: string, message: AgentMessage): void => {
     setSessions(prev => {
       const existing = prev[agentId] ?? { agentId, messages: [], updatedAt: new Date().toISOString() };
       return {
@@ -587,9 +867,10 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         },
       };
     });
-  }, []);
+    scheduleSessionSave(agentId);
+  }, [scheduleSessionSave]);
 
-  const updateMessage = useCallback((agentId: string, messageId: string, patch: Partial<AgentMessage>) => {
+  const updateMessage = useCallback((agentId: string, messageId: string, patch: Partial<AgentMessage>): void => {
     setSessions(prev => {
       const existing = prev[agentId];
       if (!existing) return prev;
@@ -602,9 +883,10 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         [agentId]: { ...existing, messages, updatedAt: new Date().toISOString() },
       };
     });
-  }, []);
+    scheduleSessionSave(agentId);
+  }, [scheduleSessionSave]);
 
-  const setSessionId = useCallback((agentId: string, claudeSessionId: string) => {
+  const setSessionId = useCallback((agentId: string, claudeSessionId: string): void => {
     setSessions(prev => {
       const existing = prev[agentId] ?? { agentId, messages: [], updatedAt: new Date().toISOString() };
       if (existing.claudeSessionId === claudeSessionId) return prev;
@@ -613,9 +895,10 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         [agentId]: { ...existing, claudeSessionId, updatedAt: new Date().toISOString() },
       };
     });
-  }, []);
+    scheduleSessionSave(agentId);
+  }, [scheduleSessionSave]);
 
-  const handleEvent = useCallback((agentId: string, event: Record<string, unknown>) => {
+  const handleEvent = useCallback((agentId: string, event: Record<string, unknown>): void => {
     const type = (event as { type?: unknown }).type;
 
     if (type === 'system' && (event as { subtype?: unknown }).subtype === 'init') {
@@ -765,7 +1048,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       setTurnActive(agentId, false);
       streamingMessageRef.current.delete(agentId);
     }
-  }, [appendMessage, updateMessage, setSessionId, setTurnActive]);
+  }, [appendMessage, updateMessage, setSessionId, setTurnActive, workspacePath]);
 
   const ensureSession = useCallback(async (agent: Agent): Promise<AgentSessionHandle | null> => {
     if (!runtimeAvailable) return null;
@@ -834,7 +1117,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     }
   }, [runtimeAvailable, ensureSession, appendMessage]);
 
-  const sendMessage = useCallback(async (agentId: string, body: string, attachments?: AgentImageAttachment[]) => {
+  const sendMessage = useCallback(async (agentId: string, body: string, attachments?: AgentImageAttachment[]): Promise<void> => {
     const agent = agentsRef.current.find(a => a.id === agentId);
     if (!agent) throw new Error('Unknown agent');
     if (!runtimeAvailable) {
@@ -863,9 +1146,15 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       const snippet = body.trim().replace(/\s+/g, ' ').slice(0, 48);
       if (snippet.length > 0) {
         const name = snippet.length < body.trim().length ? `${snippet}…` : snippet;
-        setAgents(prev => prev.map(a => a.id === agentId ? { ...a, name, updatedAt: new Date().toISOString() } : a));
-        // Keep any open chat tab in sync with the new name.
-        renameTabsByPath(`agent://${agentId}`, name);
+        // Persist the renamed chat. The slug stays the same — auto-rename
+        // changes the display name only, so existing tabs and the file
+        // location keep working.
+        if (workspacePath) {
+          void persistAgent(workspacePath, { ...agent, name, updatedAt: new Date().toISOString() }, agent.id);
+        } else {
+          setAgents(prev => prev.map(a => a.id === agentId ? { ...a, name, updatedAt: new Date().toISOString() } : a));
+          renameTabsByPath(`agent://${agentId}`, name);
+        }
       }
     }
 
@@ -906,9 +1195,9 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       });
       setTurnActive(agentId, false);
     }
-  }, [runtimeAvailable, activeTurns, appendMessage, updateMessage, setTurnActive, ensureSession]);
+  }, [runtimeAvailable, activeTurns, appendMessage, updateMessage, setTurnActive, ensureSession, persistAgent, renameTabsByPath, workspacePath]);
 
-  const cancelTurn = useCallback(async (agentId: string) => {
+  const cancelTurn = useCallback(async (agentId: string): Promise<void> => {
     await killSession(agentId);
     streamingMessageRef.current.delete(agentId);
     setTurnActive(agentId, false);
@@ -921,7 +1210,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     return draftsRef.current.get(agentId) ?? EMPTY_DRAFT;
   }, []);
 
-  const setDraft = useCallback((agentId: string, patch: Partial<AgentDraft>) => {
+  const setDraft = useCallback((agentId: string, patch: Partial<AgentDraft>): void => {
     const current = draftsRef.current.get(agentId) ?? EMPTY_DRAFT;
     const next: AgentDraft = {
       input: patch.input !== undefined ? patch.input : current.input,
@@ -941,7 +1230,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     messageId: string,
     decision: 'allow' | 'deny',
     opts?: { message?: string; updatedInput?: Record<string, unknown> },
-  ) => {
+  ): void => {
     const session = sessionsRef.current[agentId];
     const message = session?.messages.find(m => m.id === messageId);
     const req = message?.permissionRequest;
@@ -957,6 +1246,156 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       permissionRequest: { ...req, status: decision === 'allow' ? 'allowed' : 'denied', decidedAt: new Date().toISOString() },
     });
   }, [showToast, updateMessage]);
+
+  // === Effects (last) ===
+
+  // Folders snapshot stays in sync with agents + folder paths. Pure function
+  // of two inputs, so a single effect that watches both is the right shape
+  // (the alternative — recomputing inside both setters — duplicates logic
+  // and risks drifting whenever a new mutator is added).
+  useEffect(() => {
+    setFolders(computeFoldersSnapshot(agents));
+  }, [agents, folderPaths, computeFoldersSnapshot]);
+
+  // After agents load (or reload), drop any open `agent://<id>` tab whose
+  // id no longer resolves to a file. Two scenarios produce stale tabs:
+  //   1. A persisted session restore from the legacy UUID-based scheme
+  //      points at a UUID that no longer matches any agent.
+  //   2. The agent file was deleted in another window and our watcher
+  //      reloaded into a smaller agent set.
+  // Bail out until isLoaded — during the brief reset->load window
+  // `agents` is empty even though tabs may legitimately reference real
+  // (about-to-load) agents, and pruning then would close every chat
+  // tab on every workspace open.
+  useEffect(() => {
+    if (!isLoaded) return;
+    const validIds = new Set(agents.map(a => a.id));
+    const stale: string[] = [];
+    for (const tab of openTabs) {
+      if (tab.type !== 'agent') continue;
+      const id = tab.path.replace(/^agent:\/\//, '');
+      if (!validIds.has(id)) stale.push(tab.id);
+    }
+    if (stale.length === 0) return;
+    for (const tabId of stale) closeTab(tabId);
+  }, [agents, isLoaded, openTabs, closeTab]);
+
+  // Load (and reload on workspace switch). Each branch operates on its own
+  // captured `workspace` so a stale resolution that lands after we've
+  // moved on to another workspace can be detected and discarded via the
+  // `cancelled` flag + the loadedWorkspaceRef comparison.
+  useEffect(() => {
+    let cancelled = false;
+    loadedWorkspaceRef.current = null;
+
+    // Reset on every workspace change. Sessions are killed because their
+    // handles point at the previous workspace's `cwd` and would mutate the
+    // wrong tree if the user resumed them.
+    setIsLoaded(false);
+    setAgents([]);
+    setFolderPaths([]);
+    setFolders(EMPTY_FOLDERS);
+    setSessions({});
+    setActiveTurns({});
+    streamingMessageRef.current.clear();
+    // Per-chat drafts belong to the previous workspace's agents; drop them so
+    // the new workspace's chats start with empty composers.
+    draftsRef.current.clear();
+    // Clear any pending session-cache flushes — they target the previous
+    // workspace and there's nothing to flush in the new one yet.
+    for (const t of sessionSaveTimersRef.current.values()) clearTimeout(t);
+    sessionSaveTimersRef.current.clear();
+    // Echo-suppression entries are workspace-scoped paths; abandon them.
+    recentWriteTimesRef.current.clear();
+
+    const handles = sessionHandlesRef.current;
+    sessionHandlesRef.current = new Map();
+    for (const handle of handles.values()) {
+      try { void handle.stop(); } catch { /* ignore */ }
+    }
+
+    if (!workspacePath) {
+      return () => { cancelled = true; };
+    }
+
+    const workspace = workspacePath;
+    let unwatch: (() => void) | null = null;
+
+    (async () => {
+      // Drain any data still living in the legacy quipu-state.json into
+      // the file-based store before we read from disk. Idempotent — a
+      // workspace that has already been imported short-circuits to a
+      // no-op. Concurrent calls (RepoContext also runs this) share a
+      // single in-flight promise via the module's re-entry cache.
+      try {
+        await importLegacyDataForWorkspace(workspace);
+      } catch (err) {
+        console.warn('[legacy-import] failed:', err);
+        // Continue — load whatever's already in files.
+      }
+      if (cancelled) return;
+
+      const result = await reloadAgentsAndFolders(workspace, () => cancelled);
+      if (cancelled) return;
+      if (!result) {
+        // Even on failure, mark loaded so the UI flips out of its
+        // skeleton state. Empty + isLoaded=true is the right "fresh
+        // workspace, nothing here yet" presentation.
+        loadedWorkspaceRef.current = workspace;
+        setIsLoaded(true);
+        return;
+      }
+
+      setAgents(result.agents);
+      setFolderPaths(result.folders);
+
+      // Hydrate session cache for any agent that has a persisted transcript.
+      // This is fire-and-forget per agent — a missing/corrupt cache file
+      // for one agent shouldn't block the others.
+      const sessionEntries = await Promise.all(result.agents.map(async (a) => {
+        try {
+          const s = await sessionCache.loadSession(workspace, a.id);
+          return s ? [a.id, s] as const : null;
+        } catch (err) {
+          console.warn('[agent] loadSession failed', a.id, err);
+          return null;
+        }
+      }));
+      if (cancelled) return;
+
+      const merged: SessionMap = {};
+      for (const entry of sessionEntries) {
+        if (entry === null) continue;
+        merged[entry[0]] = entry[1];
+      }
+      setSessions(merged);
+
+      loadedWorkspaceRef.current = workspace;
+      setIsLoaded(true);
+    })();
+
+    // Subscribe to file changes under .quipu/ so cross-window mutations
+    // hydrate this window. Echo-suppression filters out our own writes —
+    // see markRecentWrite/isRecentEcho. The watcher's debounce upstream
+    // already coalesces rapid bursts.
+    unwatch = watchDirRecursive(`${workspace}/.quipu`, (event) => {
+      if (loadedWorkspaceRef.current !== workspace) return;
+      if (event.path && isRecentEcho(event.path)) return;
+      void (async () => {
+        const result = await reloadAgentsAndFolders(workspace, () => loadedWorkspaceRef.current !== workspace);
+        if (!result) return;
+        if (loadedWorkspaceRef.current !== workspace) return;
+        setAgents(result.agents);
+        setFolderPaths(result.folders);
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+      if (unwatch) unwatch();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspacePath]);
 
   const value: AgentContextValue = {
     agents,

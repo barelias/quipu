@@ -120,6 +120,15 @@ import SlashPopover, { filterSlashCommands, type SlashCommand } from './SlashPop
 import { useClaudeCommands } from './useClaudeCommands';
 import ModelPicker from './ModelPicker';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+
+// How many trailing messages to render on first open of a chat. Long
+// transcripts (200+ messages with markdown) made open feel laggy because
+// every MessageItem re-parses its markdown. We render the tail and let
+// the user expand history on demand via the "Load earlier" button.
+const INITIAL_VISIBLE_MESSAGES = 50;
+// Each click of "Load earlier" reveals this many additional messages.
+const LOAD_EARLIER_CHUNK = 50;
 
 interface ChatViewProps {
   tab: Tab;
@@ -156,8 +165,17 @@ export default function ChatView({ tab }: ChatViewProps) {
   const [input, setInput] = useState(initialDraft.input);
   const [attachments, setAttachments] = useState<AgentImageAttachment[]>(initialDraft.attachments);
   const [slashIndex, setSlashIndex] = useState(0);
+  // Windowed message rendering — long transcripts (hundreds of messages,
+  // each rendering its own markdown subtree) made initial open painful.
+  // We render the most recent INITIAL_VISIBLE_MESSAGES and surface a
+  // "Load earlier" affordance to expand the window. Reset on tab switch.
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_MESSAGES);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Track whether the user is at the bottom of the transcript so the
+  // autoscroll-on-new-message effect doesn't yank them downward when they
+  // scroll up to read history (or click "Load earlier").
+  const atBottomRef = useRef(true);
 
   // === Custom hooks ===
 
@@ -173,6 +191,10 @@ export default function ChatView({ tab }: ChatViewProps) {
   const slashResults = isSlashQuery ? filterSlashCommands(input, allSlashCommands) : [];
   const showSlashPopover = isSlashQuery;
   const messages = session?.messages ?? [];
+  // Slice from the tail so the most recent messages are always visible.
+  // hiddenCount drives the "Load earlier" button's label.
+  const visibleMessages = visibleCount >= messages.length ? messages : messages.slice(-visibleCount);
+  const hiddenCount = messages.length - visibleMessages.length;
 
   // === Effects (last) ===
 
@@ -199,27 +221,48 @@ export default function ChatView({ tab }: ChatViewProps) {
   }, [agentId, runtimeAvailable, resumeSession]);
 
   // When the active agent changes (tab switch in the same ChatView slot),
-  // reset local state to the new agent's stored draft. We intentionally exclude
-  // `getDraft` from the dep array because it's a stable useCallback — adding it
-  // would not change behavior, but linting against unstable callbacks is what
-  // the eslint-disable below acknowledges.
+  // reset local state to the new agent's stored draft, AND reset the
+  // visible-message window so the new chat opens at its tail. We intentionally
+  // exclude `getDraft` from the dep array because it's a stable useCallback —
+  // adding it would not change behavior, but linting against unstable callbacks
+  // is what the eslint-disable below acknowledges.
   useEffect(() => {
     const d = getDraft(agentId);
     setInput(d.input);
     setAttachments(d.attachments);
+    setVisibleCount(INITIAL_VISIBLE_MESSAGES);
+    atBottomRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-seed only when agentId flips
   }, [agentId]);
+
+  // Track whether the user is scrolled to the bottom of the transcript.
+  // The autoscroll effect below uses this so that scrolling up to read
+  // history (or expanding the window via "Load earlier") doesn't yank
+  // the view back down.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   // Keep the slash selection in range when filtering.
   useEffect(() => {
     if (slashIndex >= slashResults.length && slashResults.length > 0) setSlashIndex(0);
   }, [slashResults.length, slashIndex]);
 
-  // Autoscroll to bottom on new messages or streaming updates.
+  // Autoscroll to bottom on new messages or streaming updates — but only
+  // when the user is already at the bottom or a turn is actively streaming.
+  // Otherwise we'd snap them away from older history they're trying to read.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (atBottomRef.current || active) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [session?.messages, active]);
 
   // Auto-grow textarea as the user types.
@@ -405,15 +448,35 @@ export default function ChatView({ tab }: ChatViewProps) {
           <EmptyState agentName={displayName} present={!!agent} />
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-8">
+            {hiddenCount > 0 && (
+              // "Load earlier" affordance. We expand the window in chunks so
+              // a single click on a 500-message transcript doesn't blow up
+              // initial render again. If fewer than a chunk remain, the
+              // button reveals all of them.
+              <div className="flex justify-center mb-4">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((c) => c + LOAD_EARLIER_CHUNK)}
+                  className="px-4 py-1.5 text-[11px] font-medium rounded-full bg-bg-elevated text-text-secondary hover:bg-bg-overlay hover:text-text-primary transition-colors"
+                >
+                  Load {Math.min(hiddenCount, LOAD_EARLIER_CHUNK)} earlier message{Math.min(hiddenCount, LOAD_EARLIER_CHUNK) === 1 ? '' : 's'}
+                  {hiddenCount > LOAD_EARLIER_CHUNK && ` (${hiddenCount} hidden)`}
+                </button>
+              </div>
+            )}
             <ul className="flex flex-col">
-              {messages.map((m, idx) => (
+              {visibleMessages.map((m, idx) => (
                 <MessageItem
                   key={m.id}
                   message={m}
+                  // `isFirst` is "first IN THE RENDERED LIST" — it controls
+                  // top-margin removal. After hiding history this is the
+                  // first VISIBLE row, not the first in the underlying
+                  // session.
                   isFirst={idx === 0}
                   isLastAssistant={
                     m.role === 'assistant'
-                    && !messages.slice(idx + 1).some((n) => n.role === 'assistant')
+                    && !visibleMessages.slice(idx + 1).some((n) => n.role === 'assistant')
                   }
                   onRespondPermission={(decision, opts) => agent && respondToPermission(agent.id, m.id, decision, opts)}
                   agent={agent}
@@ -833,29 +896,42 @@ export function AskQuestionBody({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {questions.map((q, i) => (
-        <div key={i} className="bg-bg-surface rounded-lg border border-border p-3">
+        <div
+          key={i}
+          // Inset card — slightly lighter parchment than the outer container.
+          className="bg-[#FAF6EC] dark:bg-[#2F2C1E] rounded-2xl border border-[#D7D5B8] dark:border-[#4A4733] px-4 py-3.5"
+        >
           {q.header && (
-            <div className="text-[9px] font-semibold uppercase tracking-wider text-text-tertiary mb-1">{q.header}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8A7F4F] dark:text-[#B8AC78] mb-1.5">
+              {q.header}
+            </div>
           )}
-          <div className="text-sm text-text-primary mb-2">{q.question}</div>
+          <div className="text-[13px] leading-snug text-[#3D3A28] dark:text-[#E8DFC0] mb-3">
+            {q.question}
+          </div>
           {q.options && q.options.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {q.options.map((opt, j) => {
                 const isSelected = selected.get(i) === opt.label;
                 return (
-                  <Button
+                  <button
                     key={j}
                     type="button"
-                    size="sm"
-                    variant={isSelected ? 'default' : 'outline'}
                     disabled={disabled}
                     onClick={() => pickOption(i, opt.label)}
                     title={opt.description ?? undefined}
+                    className={cn(
+                      'px-4 py-1.5 text-[12px] font-medium rounded-full transition-all',
+                      'disabled:opacity-50 disabled:cursor-not-allowed',
+                      isSelected
+                        ? 'bg-[#8FA15A] text-white shadow-sm hover:bg-[#7A8A4A] dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]'
+                        : 'bg-white/60 dark:bg-[#3A3622]/60 border border-[#C8C7A8] dark:border-[#5C5A3F] text-[#4A4630] dark:text-[#D4CBA8] hover:bg-[#F0E9D6] hover:border-[#8FA15A] dark:hover:bg-[#42402B] dark:hover:border-[#9CA876]'
+                    )}
                   >
                     {opt.label}
-                  </Button>
+                  </button>
                 );
               })}
             </div>
@@ -864,15 +940,19 @@ export function AskQuestionBody({
       ))}
       {!isSingle && questions.some(q => q.options && q.options.length > 0) && (
         <div className="flex">
-          <Button
+          <button
             type="button"
-            size="sm"
-            variant="default"
             disabled={disabled || !allAnswered}
             onClick={() => submit()}
+            className={cn(
+              'px-5 py-2 text-[12px] font-medium rounded-full transition-all',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+              'bg-[#8FA15A] text-white shadow-sm hover:bg-[#7A8A4A]',
+              'dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]'
+            )}
           >
             Send answers
-          </Button>
+          </button>
         </div>
       )}
     </div>
@@ -936,12 +1016,27 @@ export function PermissionRequestItem({
 
   return (
     <li className={`${isFirst ? '' : 'mt-6'}`}>
-      <div className="rounded-xl border border-warning/50 bg-warning/10 px-4 py-3">
-        <div className="flex items-center gap-2 mb-2">
-          <HeaderIcon size={14} className="text-warning shrink-0" weight="fill" />
-          <span className="text-xs font-semibold text-warning uppercase tracking-wider">{headerLabel}</span>
+      {/*
+        Permission card — parchment palette inspired by the project's
+        knowledge-base-as-paper framing. Cream background, sage olive
+        accents for the header, and pill-shaped action buttons. Works
+        in both light and dark mode via parallel arbitrary-value
+        utilities (no theme tokens for these colors yet — they're
+        deliberately scoped to this surface).
+      */}
+      <div className="rounded-2xl border border-[#C8C7A8] dark:border-[#5C5A3F] bg-[#F5EFE3] dark:bg-[#26241A] px-5 py-4 shadow-[0_1px_2px_rgba(60,55,30,0.06),0_4px_12px_rgba(60,55,30,0.04)]">
+        <div className="flex items-center gap-2 mb-3">
+          <HeaderIcon size={14} className="text-[#7A8A4A] dark:text-[#9CA876] shrink-0" weight="fill" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7A8A4A] dark:text-[#9CA876]">
+            {headerLabel}
+          </span>
           {statusLabel && (
-            <span className={`text-[11px] px-2 py-0.5 rounded ${statusClass}`}>
+            <span
+              className={cn(
+                'text-[10px] font-medium px-2 py-0.5 rounded-full uppercase tracking-wider',
+                statusClass,
+              )}
+            >
               {statusLabel}
             </span>
           )}
@@ -957,35 +1052,47 @@ export function PermissionRequestItem({
           )
           : (
             <>
-              <div className="text-sm break-words mb-2">
+              <div className="text-[13px] break-words mb-2 text-[#3D3A28] dark:text-[#E8DFC0]">
                 <span className="font-semibold">{req.action}</span>
                 {req.path && (
                   <FilePathLink
                     display={req.path}
                     absolutePath={resolveAgentFilePath(openableFilePath(req.input) ?? '', agent, workspacePath, repos)}
-                    className="ml-2 font-mono text-text-secondary"
+                    className="ml-2 font-mono text-[#7A6F4A] dark:text-[#B8AC78]"
                   />
                 )}
-                {req.detail && <span className="ml-2 font-mono text-text-secondary">{req.detail}</span>}
+                {req.detail && <span className="ml-2 font-mono text-[#7A6F4A] dark:text-[#B8AC78]">{req.detail}</span>}
               </div>
               <ToolDetail action={req.action} input={req.input} />
             </>
           )}
 
         {pending && (
-          <div className="flex items-center gap-2 mt-3">
+          <div className="flex items-center gap-2 mt-4">
             <button
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-success text-white hover:opacity-90 transition-opacity"
+              type="button"
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-full transition-all shadow-sm',
+                'bg-[#8FA15A] text-white hover:bg-[#7A8A4A]',
+                'dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]',
+              )}
               onClick={() => onRespondPermission('allow')}
             >
-              <CheckIcon size={12} weight="bold" />
+              <CheckIcon size={11} weight="bold" />
               {isQuestion ? 'Let agent answer' : 'Allow once'}
             </button>
             <button
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-border text-text-secondary hover:text-error hover:border-error transition-colors"
+              type="button"
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-full transition-all',
+                'bg-white/60 dark:bg-[#3A3622]/60 border border-[#C8C7A8] dark:border-[#5C5A3F]',
+                'text-[#6B6243] dark:text-[#B8AC78]',
+                'hover:bg-[#F0E9D6] hover:border-[#A8957A] hover:text-[#8B5A3C]',
+                'dark:hover:bg-[#42402B] dark:hover:border-[#7A6F4A]',
+              )}
               onClick={() => onRespondPermission('deny')}
             >
-              <XIcon size={12} weight="bold" />
+              <XIcon size={11} weight="bold" />
               {isQuestion ? 'Cancel' : 'Deny'}
             </button>
           </div>

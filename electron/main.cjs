@@ -585,7 +585,20 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('read-directory', async (event, dirPath) => {
-        const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        // Treat a missing directory as empty rather than throwing. Recursive
+        // listers (agentFileStore, repoFileStore, quipuFileStore) already
+        // catch and ignore this case at the renderer side, but Electron
+        // logs every handler throw to the main-process console, which
+        // pollutes the dev terminal whenever a fresh workspace probes its
+        // not-yet-created `.quipu/agents` or `.quipu/repos`. Returning [] is
+        // the natural semantic for "list this dir" + "dir doesn't exist".
+        let entries;
+        try {
+            entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        } catch (err) {
+            if (err && err.code === 'ENOENT') return [];
+            throw err;
+        }
         return entries
             .filter(e => !HIDDEN_DIRS.has(e.name))
             .map(e => ({

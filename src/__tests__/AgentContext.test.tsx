@@ -1,105 +1,144 @@
+/**
+ * Tests for the file-store wiring inside `AgentContext`.
+ *
+ * Strategy: mock `agentFileStore`, `sessionCache`, and `quipuFileStore`
+ * directly. Those services have their own unit tests covering disk
+ * behavior; here we only verify the context's call shape, state
+ * lifecycle, and watcher integration.
+ */
+
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React, { useState } from 'react';
 import { render, act, waitFor } from '@testing-library/react';
+import type { Agent } from '@/types/agent';
+import type { FolderNode } from '../services/agentFileStore';
 
-// In-memory storage fake. Defined inside vi.mock's factory so hoisting works,
-// then re-imported below for inspection. Mirrors the pattern in
-// workspaceKeysMigration.test.ts.
-vi.mock('../services/storageService', () => {
-  const store = new Map<string, unknown>();
-  const fake = {
-    get: vi.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
-    set: vi.fn(async (key: string, value: unknown) => {
-      if (value === null || value === undefined) {
-        store.delete(key);
-      } else {
-        store.set(key, value);
-      }
-    }),
-    __store: store,
-    __reset: () => { store.clear(); },
-  };
-  return { default: fake, isElectronRuntime: () => false };
-});
-
-// Mock the dependent contexts. AgentProvider only needs:
-// - useFileSystem().workspacePath
-// - useRepo() → cloneRepoForAgent + repos
-// - useTab() → renameTabsByPath
-// - useToast() → showToast
+// === Mocks for service modules ===========================================
 //
-// We expose mutable controllers on the mock modules so individual tests can
-// flip workspacePath at runtime via React state without remounting.
+// `vi.mock` factories are hoisted above any non-import statement, so any
+// state they reference must come from `vi.hoisted` — that runs before
+// the mocks but after vitest is initialized. The hoisted block is the
+// closure source for both the mock factories and the test helpers below.
+
+const hoisted = vi.hoisted(() => ({
+  agentFileStore: {
+    loadAllAgents: vi.fn(),
+    loadAllFolders: vi.fn(),
+    saveAgent: vi.fn(),
+    deleteAgent: vi.fn(),
+    renameFolder: vi.fn(),
+    deleteFolder: vi.fn(),
+    createFolder: vi.fn(),
+  },
+  sessionCache: {
+    loadSession: vi.fn(),
+    saveSession: vi.fn(),
+    deleteSession: vi.fn(),
+    renameSession: vi.fn(),
+    workspaceHash: vi.fn(),
+  },
+  watchers: [] as Array<{
+    absDir: string;
+    onChange: (event: { type: 'change' | 'rename'; path?: string }) => void;
+    unsubscribed: boolean;
+  }>,
+}));
+const mockAgentFileStore = hoisted.agentFileStore;
+const mockSessionCache = hoisted.sessionCache;
+
+vi.mock('../services/agentFileStore', () => hoisted.agentFileStore);
+vi.mock('../services/sessionCache', () => hoisted.sessionCache);
+vi.mock('../services/quipuFileStore', () => ({
+  watchDirRecursive: (
+    absDir: string,
+    onChange: (event: { type: 'change' | 'rename'; path?: string }) => void,
+  ): (() => void) => {
+    const entry = { absDir, onChange, unsubscribed: false };
+    hoisted.watchers.push(entry);
+    return () => { entry.unsubscribed = true; };
+  },
+}));
+// Stub legacyImport to a no-op so tests that mount AgentContext don't
+// trigger the real import pipeline (which expects `~/.quipu/` IO).
+vi.mock('../services/legacyImport', () => ({
+  importLegacyDataForWorkspace: vi.fn(async () => ({ imported: 0, errors: 0 })),
+}));
+
 let currentWorkspacePath: string | null = null;
+vi.mock('../context/FileSystemContext', () => ({
+  useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
+}));
 
-vi.mock('../context/FileSystemContext', () => {
-  return {
-    useFileSystem: () => ({ workspacePath: currentWorkspacePath }),
-  };
-});
+vi.mock('../context/RepoContext', () => ({
+  useRepo: () => ({
+    cloneRepoForAgent: vi.fn(async () => '/fake/clone'),
+    repos: [],
+  }),
+}));
 
-vi.mock('../context/RepoContext', () => {
-  return {
-    useRepo: () => ({
-      cloneRepoForAgent: vi.fn(async () => '/fake/clone'),
-      repos: [],
-    }),
-  };
-});
+vi.mock('../context/TabContext', () => ({
+  useTab: () => ({
+    renameTabsByPath: vi.fn(),
+    renameTabPath: vi.fn(),
+    openTabs: [],
+    closeTab: vi.fn(),
+  }),
+}));
 
-vi.mock('../context/TabContext', () => {
-  return {
-    useTab: () => ({ renameTabsByPath: vi.fn() }),
-  };
-});
+vi.mock('../components/ui/Toast', () => ({
+  useToast: () => ({ showToast: vi.fn() }),
+}));
 
-vi.mock('../components/ui/Toast', () => {
-  return {
-    useToast: () => ({ showToast: vi.fn() }),
-  };
-});
+vi.mock('../services/agentRuntime', () => ({
+  isElectronAgentRuntime: () => false,
+  startSession: vi.fn(),
+}));
 
-// Agent runtime — we don't exercise the subprocess path, just the workspace
-// load/save. Provide non-Electron defaults so any path that touches the
-// runtime is a no-op.
-vi.mock('../services/agentRuntime', () => {
-  return {
-    isElectronAgentRuntime: () => false,
-    startSession: vi.fn(),
-  };
-});
-
-import storageService from '../services/storageService';
-import { agentsKey, agentSessionsKey, agentFoldersKey, migrationFlagKey } from '../services/workspaceKeys';
 import { AgentProvider, useAgent } from '../context/AgentContext';
 
-const fakeStorage = storageService as unknown as {
-  get: ReturnType<typeof vi.fn>;
-  set: ReturnType<typeof vi.fn>;
-  __store: Map<string, unknown>;
-  __reset: () => void;
-};
+// === Test harness =========================================================
 
-// Test harness component: drives `currentWorkspacePath` via React state and
-// re-renders the provider whenever it changes, simulating a real
-// FileSystemContext value flip.
-function Harness({ initialPath, onReady, children }: {
-  initialPath: string | null;
-  onReady?: (api: { setPath: (p: string | null) => void }) => void;
-  children: React.ReactNode;
-}) {
-  const [path, setPath] = useState<string | null>(initialPath);
-  // Sync the module-level mock state every render so useFileSystem() returns
-  // the latest path during this render pass.
-  currentWorkspacePath = path;
-  React.useEffect(() => { onReady?.({ setPath }); }, [onReady]);
-  return <AgentProvider>{children}</AgentProvider>;
+function makeAgent(overrides: Partial<Agent> & Pick<Agent, 'id' | 'slug' | 'name'>): Agent {
+  const now = '2026-04-30T10:00:00Z';
+  return {
+    id: overrides.id,
+    slug: overrides.slug,
+    name: overrides.name,
+    folder: overrides.folder,
+    kind: overrides.kind ?? 'agent',
+    systemPrompt: overrides.systemPrompt ?? '',
+    model: overrides.model ?? 'claude-sonnet-4-5',
+    bindings: overrides.bindings ?? [],
+    permissionMode: overrides.permissionMode ?? 'default',
+    allowedTools: overrides.allowedTools,
+    createdAt: overrides.createdAt ?? now,
+    updatedAt: overrides.updatedAt ?? now,
+  };
 }
 
-/** Renders the current AgentContext state into the DOM so tests can poll it
- *  via standard testing-library assertions. */
+interface ActionsApi {
+  upsertAgent: (agent: Agent) => void;
+  deleteAgent: (id: string) => void;
+  createChat: (opts?: { folder?: string; name?: string }) => Agent;
+  createFolder: (kind: 'agent' | 'chat', name: string) => void;
+  deleteFolder: (kind: 'agent' | 'chat', name: string) => void;
+  renameFolder: (kind: 'agent' | 'chat', oldName: string, newName: string) => void;
+}
+
+let actionsApi: ActionsApi | null = null;
+
 function StateProbe() {
   const ctx = useAgent();
+  React.useEffect(() => {
+    actionsApi = {
+      upsertAgent: ctx.upsertAgent,
+      deleteAgent: ctx.deleteAgent,
+      createChat: ctx.createChat,
+      createFolder: ctx.createFolder,
+      deleteFolder: ctx.deleteFolder,
+      renameFolder: ctx.renameFolder,
+    };
+  });
   return (
     <div>
       <div data-testid="isLoaded">{String(ctx.isLoaded)}</div>
@@ -110,59 +149,50 @@ function StateProbe() {
   );
 }
 
-interface ActionsApi {
-  upsertAgent: (id: string) => void;
-}
-
-let actionsApi: ActionsApi | null = null;
-
-function ActionsProbe() {
-  const ctx = useAgent();
-  React.useEffect(() => {
-    actionsApi = {
-      upsertAgent: (id: string) => ctx.upsertAgent({
-        id,
-        name: id,
-        kind: 'agent',
-        systemPrompt: '',
-        model: 'claude-sonnet-4-5',
-        bindings: [],
-        permissionMode: 'default',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
-    };
-  });
-  return null;
+function Harness({ initialPath, onReady, children }: {
+  initialPath: string | null;
+  onReady?: (api: { setPath: (p: string | null) => void }) => void;
+  children: React.ReactNode;
+}) {
+  const [path, setPath] = useState<string | null>(initialPath);
+  currentWorkspacePath = path;
+  React.useEffect(() => { onReady?.({ setPath }); }, [onReady]);
+  return <AgentProvider>{children}</AgentProvider>;
 }
 
 beforeEach(() => {
-  fakeStorage.__reset();
-  fakeStorage.get.mockClear();
-  fakeStorage.set.mockClear();
+  for (const m of Object.values(mockAgentFileStore)) m.mockReset();
+  for (const m of Object.values(mockSessionCache)) m.mockReset();
+  // Restore default no-op implementations after reset.
+  mockAgentFileStore.loadAllAgents.mockImplementation(async () => []);
+  mockAgentFileStore.loadAllFolders.mockImplementation(async () => []);
+  mockAgentFileStore.saveAgent.mockImplementation(async (_, agent: Agent, _prev?: string) => {
+    const folder = agent.folder ?? '';
+    const slug = agent.slug ?? '';
+    return folder === '' ? slug : `${folder}/${slug}`;
+  });
+  mockAgentFileStore.deleteAgent.mockImplementation(async () => {});
+  mockAgentFileStore.createFolder.mockImplementation(async () => {});
+  mockAgentFileStore.deleteFolder.mockImplementation(async () => {});
+  mockAgentFileStore.renameFolder.mockImplementation(async () => {});
+  mockSessionCache.loadSession.mockImplementation(async () => null);
+  mockSessionCache.saveSession.mockImplementation(async () => {});
+  mockSessionCache.deleteSession.mockImplementation(async () => {});
+
+  hoisted.watchers.length = 0;
   currentWorkspacePath = null;
   actionsApi = null;
-  // Mark migration flag set by default so most tests can exercise the load
-  // path without involving the migration step. Tests that want migration
-  // explicitly clear the flag in setup.
-  fakeStorage.__store.set(migrationFlagKey(), true);
 });
 
-describe('AgentProvider workspace-scoped storage', () => {
-  it('happy path: mounts with workspacePath=/foo and populates state from scoped keys', async () => {
-    const seededAgents = [{
-      id: 'a1',
-      name: 'Agent 1',
-      kind: 'agent',
-      systemPrompt: '',
-      model: 'claude-sonnet-4-5',
-      bindings: [],
-      permissionMode: 'default',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    }];
-    fakeStorage.__store.set(agentsKey('/foo'), seededAgents);
-    fakeStorage.__store.set(agentFoldersKey('/foo'), { agents: ['team-a'], chats: ['inbox'] });
+describe('AgentProvider — file-store load lifecycle', () => {
+  it('happy path: mounts with workspacePath=/foo and populates state from agentFileStore', async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([
+      makeAgent({ id: 'frame-responder', slug: 'frame-responder', name: 'FRAME Responder' }),
+      makeAgent({ id: 'research/foo', slug: 'foo', folder: 'research', name: 'Foo' }),
+    ]);
+    mockAgentFileStore.loadAllFolders.mockResolvedValueOnce([
+      { path: 'research' },
+    ]);
 
     const { getByTestId } = render(
       <Harness initialPath="/foo">
@@ -170,45 +200,33 @@ describe('AgentProvider workspace-scoped storage', () => {
       </Harness>,
     );
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-    });
-    expect(getByTestId('agentIds').textContent).toBe('a1');
-    expect(getByTestId('folders.agents').textContent).toBe('team-a');
-    expect(getByTestId('folders.chats').textContent).toBe('inbox');
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(getByTestId('agentIds').textContent).toBe('frame-responder,research/foo');
+    expect(mockAgentFileStore.loadAllAgents).toHaveBeenCalledWith('/foo');
+    expect(mockAgentFileStore.loadAllFolders).toHaveBeenCalledWith('/foo');
   });
 
-  it('mounts with workspacePath=null → state stays empty, isLoaded false, no scoped reads', async () => {
+  it('mounts with workspacePath=null → state stays empty, no file-store calls', async () => {
     const { getByTestId } = render(
       <Harness initialPath={null}>
         <StateProbe />
       </Harness>,
     );
 
-    // Give effects a chance to flush.
     await act(async () => { await Promise.resolve(); });
 
     expect(getByTestId('isLoaded').textContent).toBe('false');
     expect(getByTestId('agentIds').textContent).toBe('');
-
-    // No scoped get for any of the workspace keys.
-    const calls = fakeStorage.get.mock.calls.map(c => c[0]);
-    expect(calls.some((k: string) => k.startsWith('agents:'))).toBe(false);
-    expect(calls.some((k: string) => k.startsWith('agent-sessions:'))).toBe(false);
-    expect(calls.some((k: string) => k.startsWith('agent-folders:'))).toBe(false);
+    expect(mockAgentFileStore.loadAllAgents).not.toHaveBeenCalled();
+    expect(mockAgentFileStore.loadAllFolders).not.toHaveBeenCalled();
   });
 
-  it('workspace switch /foo → /bar: /foo state cleared, /bar scoped keys load, /bar gets its own data', async () => {
-    fakeStorage.__store.set(agentsKey('/foo'), [{
-      id: 'foo-1', name: 'Foo', kind: 'agent', systemPrompt: '', model: 'claude-sonnet-4-5',
-      bindings: [], permissionMode: 'default',
-      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-    }]);
-    fakeStorage.__store.set(agentsKey('/bar'), [{
-      id: 'bar-1', name: 'Bar', kind: 'agent', systemPrompt: '', model: 'claude-sonnet-4-5',
-      bindings: [], permissionMode: 'default',
-      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-    }]);
+  it('workspace switch /foo → /bar clears state and reloads from /bar', async () => {
+    mockAgentFileStore.loadAllAgents.mockImplementation(async (workspace: string) => {
+      if (workspace === '/foo') return [makeAgent({ id: 'foo-1', slug: 'foo-1', name: 'Foo' })];
+      if (workspace === '/bar') return [makeAgent({ id: 'bar-1', slug: 'bar-1', name: 'Bar' })];
+      return [];
+    });
 
     let api: { setPath: (p: string | null) => void } | null = null;
     const { getByTestId } = render(
@@ -217,42 +235,24 @@ describe('AgentProvider workspace-scoped storage', () => {
       </Harness>,
     );
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('agentIds').textContent).toBe('foo-1');
-    });
-
+    await waitFor(() => expect(getByTestId('agentIds').textContent).toBe('foo-1'));
     expect(api).not.toBeNull();
-    await act(async () => {
-      api!.setPath('/bar');
-    });
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('agentIds').textContent).toBe('bar-1');
-    });
-
-    // Confirm that during the switch, /foo's data was not overwritten with
-    // /bar's data, and /bar's data was not overwritten with empty.
-    expect(fakeStorage.__store.get(agentsKey('/foo'))).toEqual([
-      expect.objectContaining({ id: 'foo-1' }),
-    ]);
-    expect(fakeStorage.__store.get(agentsKey('/bar'))).toEqual([
-      expect.objectContaining({ id: 'bar-1' }),
-    ]);
+    await act(async () => { api!.setPath('/bar'); });
+    await waitFor(() => expect(getByTestId('agentIds').textContent).toBe('bar-1'));
   });
 
-  it('rapid workspace switch /foo → /bar → /foo before initial load completes: latest path wins', async () => {
-    fakeStorage.__store.set(agentsKey('/foo'), [{
-      id: 'foo-1', name: 'Foo', kind: 'agent', systemPrompt: '', model: 'claude-sonnet-4-5',
-      bindings: [], permissionMode: 'default',
-      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-    }]);
-    fakeStorage.__store.set(agentsKey('/bar'), [{
-      id: 'bar-1', name: 'Bar', kind: 'agent', systemPrompt: '', model: 'claude-sonnet-4-5',
-      bindings: [], permissionMode: 'default',
-      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-    }]);
+  it('rapid workspace switch /foo → /bar → /foo: latest path wins (cancelled flag)', async () => {
+    let resolveFoo: (v: Agent[]) => void = () => {};
+    let resolveBar: (v: Agent[]) => void = () => {};
+    const fooPromise = new Promise<Agent[]>(res => { resolveFoo = res; });
+    const barPromise = new Promise<Agent[]>(res => { resolveBar = res; });
+
+    mockAgentFileStore.loadAllAgents.mockImplementation(async (workspace: string) => {
+      if (workspace === '/foo') return fooPromise;
+      if (workspace === '/bar') return barPromise;
+      return [];
+    });
 
     let api: { setPath: (p: string | null) => void } | null = null;
     const { getByTestId } = render(
@@ -261,78 +261,149 @@ describe('AgentProvider workspace-scoped storage', () => {
       </Harness>,
     );
 
-    // Synchronously rapid-fire switches before any load resolves.
+    // Quickly hop to /bar and back to /foo BEFORE either load resolves.
     await act(async () => {
       api!.setPath('/bar');
       api!.setPath('/foo');
     });
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('agentIds').textContent).toBe('foo-1');
-    });
-  });
-
-  it('upsertAgent before isLoaded does NOT trigger a save (no empty-write to new workspace key)', async () => {
-    // Slow the get so we can observe the pre-load state.
-    let resolveAgents: ((v: unknown) => void) | null = null;
-    fakeStorage.get.mockImplementation((key: string) => {
-      if (key === agentsKey('/slow')) {
-        return new Promise(res => { resolveAgents = res; });
-      }
-      return Promise.resolve(fakeStorage.__store.has(key) ? fakeStorage.__store.get(key) : null);
-    });
-
-    const { getByTestId } = render(
-      <Harness initialPath="/slow">
-        <StateProbe />
-        <ActionsProbe />
-      </Harness>,
-    );
-
-    // Wait until probe sees isLoaded=false. Until the get resolves, no save
-    // should have fired regardless of any state mutation we trigger.
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('false');
-    });
-
-    // Snapshot set-call count before triggering an upsert that would normally
-    // produce a save.
-    const setCallsBefore = fakeStorage.set.mock.calls.length;
-
-    expect(actionsApi).not.toBeNull();
+    // Now resolve both — only /foo's data should win.
     await act(async () => {
-      actionsApi!.upsertAgent('pre-load');
-    });
-
-    // No additional saves since we're still not isLoaded.
-    expect(fakeStorage.set.mock.calls.length).toBe(setCallsBefore);
-
-    // Now release the load.
-    await act(async () => {
-      resolveAgents!(null);
+      resolveBar([makeAgent({ id: 'bar-1', slug: 'bar-1', name: 'Bar' })]);
+      resolveFoo([makeAgent({ id: 'foo-final', slug: 'foo-final', name: 'Foo final' })]);
       await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-    });
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(getByTestId('agentIds').textContent).toBe('foo-final');
+  });
+});
 
-    // Critically, the agentsKey('/slow') key was NOT set with an empty array
-    // during the pre-load window — only after isLoaded became true.
-    const setCallsDuringPreload = fakeStorage.set.mock.calls.slice(0, setCallsBefore);
-    const preloadAgentsWrites = setCallsDuringPreload.filter(c => c[0] === agentsKey('/slow'));
-    expect(preloadAgentsWrites).toEqual([]);
+describe('AgentProvider — mutators dispatch to the file store', () => {
+  beforeEach(async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValue([]);
+    mockAgentFileStore.loadAllFolders.mockResolvedValue([]);
   });
 
-  it('workspace switch kills active session handles and does not destroy previous workspace data', async () => {
-    // Simulate a previous workspace having sessions persisted. The session
-    // map is loaded from storage; on workspace switch the in-memory state is
-    // cleared and the previous workspace's storage record must NOT be
-    // overwritten by the empty-clear (the !isLoaded guard on the save effect).
-    fakeStorage.__store.set(agentSessionsKey('/foo'), {
-      'a1': { agentId: 'a1', messages: [], updatedAt: '2026-01-01T00:00:00Z' },
+  async function mount(): Promise<void> {
+    const { getByTestId } = render(
+      <Harness initialPath="/foo">
+        <StateProbe />
+      </Harness>,
+    );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(actionsApi).not.toBeNull();
+  }
+
+  it('upsertAgent (new) calls saveAgent with previousId=undefined and adds to state', async () => {
+    await mount();
+    const fresh = makeAgent({ id: 'new-1', slug: 'new-1', name: 'Fresh' });
+
+    await act(async () => {
+      actionsApi!.upsertAgent(fresh);
+      await Promise.resolve();
     });
+
+    expect(mockAgentFileStore.saveAgent).toHaveBeenCalledTimes(1);
+    const [ws, agent, prev] = mockAgentFileStore.saveAgent.mock.calls[0];
+    expect(ws).toBe('/foo');
+    expect((agent as Agent).slug).toBe('new-1');
+    expect(prev).toBeUndefined();
+  });
+
+  it('upsertAgent (existing) passes previousId so the file store can clean up renames', async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([
+      makeAgent({ id: 'old-slug', slug: 'old-slug', name: 'Old' }),
+    ]);
+    await mount();
+    // Wait for initial agents to populate.
+    const updated = makeAgent({ id: 'old-slug', slug: 'old-slug', name: 'Renamed' });
+
+    await act(async () => {
+      actionsApi!.upsertAgent(updated);
+      await Promise.resolve();
+    });
+
+    expect(mockAgentFileStore.saveAgent).toHaveBeenCalledTimes(1);
+    const [, , prev] = mockAgentFileStore.saveAgent.mock.calls[0];
+    expect(prev).toBe('old-slug');
+  });
+
+  it('deleteAgent calls both deleteAgent AND deleteSession and updates state', async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([
+      makeAgent({ id: 'gone', slug: 'gone', name: 'Gone' }),
+    ]);
+    await mount();
+
+    await act(async () => {
+      actionsApi!.deleteAgent('gone');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockAgentFileStore.deleteAgent).toHaveBeenCalledWith('/foo', 'gone');
+    expect(mockSessionCache.deleteSession).toHaveBeenCalledWith('/foo', 'gone');
+  });
+
+  it('createChat auto-slugs the name and saves through agentFileStore', async () => {
+    await mount();
+
+    let result: Agent | null = null;
+    await act(async () => {
+      result = actionsApi!.createChat({ name: 'My new chat' });
+      await Promise.resolve();
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.slug).toBe('my-new-chat');
+    expect(result!.kind).toBe('chat');
+    expect(mockAgentFileStore.saveAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('createFolder calls agentFileStore.createFolder and triggers a reload', async () => {
+    await mount();
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([]);
+    mockAgentFileStore.loadAllFolders.mockResolvedValueOnce([{ path: 'planning' }]);
+
+    await act(async () => {
+      actionsApi!.createFolder('agent', 'Planning');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockAgentFileStore.createFolder).toHaveBeenCalled();
+    const [ws, folderPath] = mockAgentFileStore.createFolder.mock.calls[0];
+    expect(ws).toBe('/foo');
+    expect(folderPath).toBe('planning');
+  });
+
+  it('deleteFolder calls agentFileStore.deleteFolder and triggers a reload', async () => {
+    await mount();
+
+    await act(async () => {
+      actionsApi!.deleteFolder('agent', 'planning');
+      await Promise.resolve();
+    });
+
+    expect(mockAgentFileStore.deleteFolder).toHaveBeenCalledWith('/foo', 'planning');
+  });
+
+  it('renameFolder calls agentFileStore.renameFolder and triggers a reload', async () => {
+    await mount();
+
+    await act(async () => {
+      actionsApi!.renameFolder('agent', 'planning', 'design');
+      await Promise.resolve();
+    });
+
+    expect(mockAgentFileStore.renameFolder).toHaveBeenCalledWith('/foo', 'planning', 'design');
+  });
+});
+
+describe('AgentProvider — file watcher integration', () => {
+  it('subscribes to a watcher rooted at <workspace>/.quipu and unsubscribes on workspace switch', async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValue([]);
+    mockAgentFileStore.loadAllFolders.mockResolvedValue([]);
 
     let api: { setPath: (p: string | null) => void } | null = null;
     const { getByTestId } = render(
@@ -340,69 +411,75 @@ describe('AgentProvider workspace-scoped storage', () => {
         <StateProbe />
       </Harness>,
     );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    expect(hoisted.watchers.some(w => w.absDir === '/foo/.quipu' && !w.unsubscribed)).toBe(true);
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-    });
-
-    // Switch — sessions for /foo should be cleared from memory, then /bar
-    // loads its own (empty) sessions. The /foo sessions in storage MUST
-    // remain intact.
     await act(async () => { api!.setPath('/bar'); });
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-    });
-
-    // /foo's session data in storage was not destroyed by the switch.
-    expect(fakeStorage.__store.get(agentSessionsKey('/foo'))).toEqual({
-      'a1': expect.objectContaining({ agentId: 'a1' }),
-    });
+    // The /foo watcher must be torn down; a new one for /bar is active.
+    const fooWatcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(fooWatcher?.unsubscribed).toBe(true);
+    expect(hoisted.watchers.some(w => w.absDir === '/bar/.quipu' && !w.unsubscribed)).toBe(true);
   });
 
-  it('migration: opening /foo for first time copies globals into agents:/foo and clears globals', async () => {
-    // Clear the flag this test set in beforeEach.
-    fakeStorage.__store.delete(migrationFlagKey());
-    fakeStorage.__store.set('agents', [{
-      id: 'legacy-1', name: 'Legacy', kind: 'agent', systemPrompt: '', model: 'claude-sonnet-4-5',
-      bindings: [], permissionMode: 'default',
-      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-    }]);
+  it('watcher event triggers a reload', async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([]);
+    mockAgentFileStore.loadAllFolders.mockResolvedValueOnce([]);
 
     const { getByTestId } = render(
       <Harness initialPath="/foo">
         <StateProbe />
       </Harness>,
     );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
-      expect(getByTestId('agentIds').textContent).toBe('legacy-1');
-    });
-
-    expect(fakeStorage.__store.get(agentsKey('/foo'))).toEqual([
-      expect.objectContaining({ id: 'legacy-1' }),
+    // Cross-window mutation: a new agent file appeared.
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([
+      makeAgent({ id: 'cross-win', slug: 'cross-win', name: 'Cross window' }),
     ]);
-    expect(fakeStorage.__store.has('agents')).toBe(false);
-    expect(fakeStorage.__store.get(migrationFlagKey())).toBe(true);
+    mockAgentFileStore.loadAllFolders.mockResolvedValueOnce([]);
+
+    const watcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(watcher).toBeDefined();
+    await act(async () => {
+      watcher!.onChange({ type: 'change', path: '/foo/.quipu/agents/cross-win.json' });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getByTestId('agentIds').textContent).toBe('cross-win'));
   });
 
-  it('error path: storage.get rejects on a scoped key → isLoaded still flips to true, state stays empty', async () => {
-    fakeStorage.get.mockImplementation(async (key: string) => {
-      if (key === agentsKey('/foo')) throw new Error('boom');
-      return fakeStorage.__store.has(key) ? fakeStorage.__store.get(key) : null;
-    });
+  it('echo suppression: reload is NOT triggered for paths just written by this window', async () => {
+    mockAgentFileStore.loadAllAgents.mockResolvedValueOnce([]);
+    mockAgentFileStore.loadAllFolders.mockResolvedValueOnce([]);
 
     const { getByTestId } = render(
       <Harness initialPath="/foo">
         <StateProbe />
       </Harness>,
     );
+    await waitFor(() => expect(getByTestId('isLoaded').textContent).toBe('true'));
+    const initialLoadCalls = mockAgentFileStore.loadAllAgents.mock.calls.length;
 
-    await waitFor(() => {
-      expect(getByTestId('isLoaded').textContent).toBe('true');
+    // upsertAgent writes a file and registers it for echo suppression.
+    const fresh = makeAgent({ id: 'echoed', slug: 'echoed', name: 'Echoed' });
+    await act(async () => {
+      actionsApi!.upsertAgent(fresh);
+      await Promise.resolve();
     });
 
-    expect(getByTestId('agentIds').textContent).toBe('');
+    // Watcher fires for the same path we just wrote — should be ignored.
+    const watcher = hoisted.watchers.find(w => w.absDir === '/foo/.quipu');
+    expect(watcher).toBeDefined();
+    await act(async () => {
+      watcher!.onChange({ type: 'change', path: '/foo/.quipu/agents/echoed.json' });
+      await Promise.resolve();
+    });
+
+    // No additional reload past the initial mount load. (loadAllAgents
+    // count stayed at initial — the echoed event was suppressed.)
+    expect(mockAgentFileStore.loadAllAgents.mock.calls.length).toBe(initialLoadCalls);
   });
 });

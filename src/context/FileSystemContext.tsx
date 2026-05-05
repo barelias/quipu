@@ -1,7 +1,12 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import fs from '../services/fileSystem';
 import claudeInstaller from '../services/claudeInstaller';
-import storage from '../services/storageService';
+import {
+  loadRecentWorkspaces,
+  saveRecentWorkspaces,
+  loadLastOpenedWorkspace,
+  saveLastOpenedWorkspace,
+} from '../services/appConfigStore';
 import { useToast } from '../components/ui/Toast';
 import type { FileTreeEntry, RecentWorkspace } from '../types/workspace';
 
@@ -133,17 +138,18 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
 
   // --- Recent workspace management ---
   //
-  // Per-window contract: the `recentWorkspaces` storage key is shared across
-  // windows, but each window only READS from it once on mount (see the load
-  // effect below). After mount, mutations operate on the in-memory React
-  // state via the functional setState pattern and write the new array back
-  // to storage. They never re-read from storage to merge other windows'
-  // changes. This means each window's recent list reflects only what THAT
-  // window has opened since launch (plus whatever was in storage at startup).
+  // Per-window contract: the recent-workspaces file at
+  // `~/.quipu/recent-workspaces.json` is shared across windows, but each
+  // window only READS from it once on mount (see the load effect below).
+  // After mount, mutations operate on the in-memory React state via the
+  // functional setState pattern and write the new array back to disk.
+  // They never re-read to merge other windows' changes. This means each
+  // window's recent list reflects only what THAT window has opened since
+  // launch (plus whatever was on disk at startup).
   //
-  // Why: cross-window read-merge reintroduces the last-writer-wins race we
-  // fixed for agents/repos. The user explicitly chose "per-window" over
-  // "global with synchronization", so do NOT reintroduce a storage read in
+  // Why: cross-window read-merge reintroduces the last-writer-wins race
+  // we fixed for agents/repos. The user explicitly chose "per-window"
+  // over "global with synchronization", so do NOT reintroduce a read in
   // these mutation callbacks.
 
   const updateRecentWorkspaces = useCallback(async (folderPath: string) => {
@@ -152,35 +158,35 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
     setRecentWorkspaces(prev => {
       const deduped = prev.filter(r => r.path !== folderPath);
       const next = [entry, ...deduped].slice(0, 10);
-      storage.set('recentWorkspaces', next).catch(() => {});
+      saveRecentWorkspaces(next).catch(() => {});
       return next;
     });
   }, []);
 
-  // Per-window: clears only this window's local view + storage. Other
-  // windows retain their own in-memory list until they remount.
+  // Per-window: clears only this window's local view + on-disk file.
+  // Other windows retain their own in-memory list until they remount.
   const clearRecentWorkspaces = useCallback(async () => {
     setRecentWorkspaces(() => {
-      storage.set('recentWorkspaces', []).catch(() => {});
+      saveRecentWorkspaces([]).catch(() => {});
       return [];
     });
   }, []);
 
-  // Per-window: operates on the local state only. No-op if the path isn't
-  // present locally (avoids spurious storage writes).
+  // Per-window: operates on the local state only. No-op if the path
+  // isn't present locally (avoids spurious file writes).
   const removeFromRecentWorkspaces = useCallback(async (folderPath: string) => {
     setRecentWorkspaces(prev => {
       const filtered = prev.filter(r => r.path !== folderPath);
       if (filtered.length === prev.length) return prev;
-      storage.set('recentWorkspaces', filtered).catch(() => {});
+      saveRecentWorkspaces(filtered).catch(() => {});
       return filtered;
     });
   }, []);
 
-  // Called once from the mount effect with the just-loaded recents. Prunes
-  // entries whose paths no longer exist on disk and writes the cleaned list
-  // back to storage (a one-time-per-window-mount cleanup). Does NOT re-read
-  // from storage internally — operates on the argument array.
+  // Called once from the mount effect with the just-loaded recents.
+  // Prunes entries whose paths no longer exist on disk and writes the
+  // cleaned list back to disk (a one-time-per-window-mount cleanup).
+  // Does NOT re-read internally — operates on the argument array.
   const validateAndPruneWorkspaces = useCallback(async (workspaces: RecentWorkspace[]): Promise<RecentWorkspace[]> => {
     if (!workspaces || workspaces.length === 0) return workspaces;
 
@@ -195,7 +201,7 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
     }
 
     if (validated.length < workspaces.length) {
-      await storage.set('recentWorkspaces', validated);
+      await saveRecentWorkspaces(validated);
       setRecentWorkspaces(validated);
     }
 
@@ -226,6 +232,11 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
 
     // Save to workspace history (fire-and-forget)
     updateRecentWorkspaces(folderPath).catch(() => {});
+
+    // Persist the per-window last-opened workspace so reopening Quipu
+    // restores the right workspace. Fire-and-forget — failure here just
+    // means the next launch falls back to recents[0].
+    saveLastOpenedWorkspace(folderPath).catch(() => {});
 
     // Session restore handled by TabContext watching workspacePath changes
 
@@ -296,22 +307,33 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
 
   // --- Effects ---
 
-  // Load workspace history on mount; auto-open last workspace
+  // Load workspace history on mount; auto-open last-opened workspace.
+  //
+  // Per-window contract: this is the ONLY read of recent-workspaces and
+  // window-state for the lifetime of this provider. Subsequent mutations
+  // operate on in-memory state and write back to disk; they never read.
   useEffect(() => {
     (async () => {
-      const recent = (await storage.get('recentWorkspaces') as RecentWorkspace[] | null) || [];
+      const recent = await loadRecentWorkspaces();
       setRecentWorkspaces(recent);
 
-      if (recent.length > 0) {
-        const last = recent[0];
+      // Auto-open the last explicitly-opened workspace from window-state
+      // rather than guessing recents[0]. The two usually agree, but they
+      // can diverge if the user removed an entry from the recents list
+      // without picking a new workspace.
+      const lastOpened = await loadLastOpenedWorkspace();
+      if (lastOpened) {
         try {
-          const entries = await fs.readDirectory(last.path);
-          setWorkspacePath(last.path);
+          const entries = await fs.readDirectory(lastOpened);
+          setWorkspacePath(lastOpened);
           setFileTree(entries as FileTreeEntry[]);
-          claudeInstaller.installFrameSkills(last.path).catch(() => {});
+          claudeInstaller.installFrameSkills(lastOpened).catch(() => {});
           // Session restore handled by TabContext watching workspacePath changes
         } catch {
-          showToast(`Last workspace not found: ${last.name || last.path}`, 'warning');
+          // Try to surface a helpful name from the recents list.
+          const matched = recent.find(r => r.path === lastOpened);
+          const label = matched?.name || lastOpened;
+          showToast(`Last workspace not found: ${label}`, 'warning');
         }
       }
 

@@ -2,26 +2,40 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, act, waitFor } from '@testing-library/react';
 
-// In-memory storage fake. Defined inside vi.mock's factory so hoisting works,
-// then re-imported below for inspection. Mirrors the pattern in
-// AgentContext.test.tsx and RepoContext.test.tsx.
-vi.mock('../services/storageService', () => {
-  const store = new Map<string, unknown>();
+// In-memory fake of `appConfigStore`. Defined inside vi.mock's factory so
+// hoisting works, then re-imported below for inspection. Mirrors the
+// pattern used previously when this test mocked `storageService`.
+//
+// Note the per-window contract: each `FileSystemProvider` mount calls
+// `loadRecentWorkspaces` and `loadLastOpenedWorkspace` exactly once. After
+// mount, mutations write back via `saveRecentWorkspaces` /
+// `saveLastOpenedWorkspace` but never re-read.
+vi.mock('../services/appConfigStore', () => {
+  const recentsRef: { value: unknown } = { value: null };
+  const lastOpenedRef: { value: string | null } = { value: null };
   const fake = {
-    get: vi.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
-    set: vi.fn(async (key: string, value: unknown) => {
-      if (value === null || value === undefined) {
-        store.delete(key);
-      } else {
-        // Clone arrays so callers reading back later don't see references
-        // mutated by subsequent setters in another window.
-        store.set(key, Array.isArray(value) ? [...value] : value);
-      }
+    loadRecentWorkspaces: vi.fn(async () => {
+      const v = recentsRef.value;
+      if (Array.isArray(v)) return [...v];
+      return [];
     }),
-    __store: store,
-    __reset: () => { store.clear(); },
+    saveRecentWorkspaces: vi.fn(async (list: unknown[]) => {
+      // Clone so callers reading back later don't see references mutated
+      // by subsequent setters in another window.
+      recentsRef.value = Array.isArray(list) ? [...list] : list;
+    }),
+    loadLastOpenedWorkspace: vi.fn(async () => lastOpenedRef.value),
+    saveLastOpenedWorkspace: vi.fn(async (path: string | null) => {
+      lastOpenedRef.value = path;
+    }),
+    __recentsRef: recentsRef,
+    __lastOpenedRef: lastOpenedRef,
+    __reset: () => {
+      recentsRef.value = null;
+      lastOpenedRef.value = null;
+    },
   };
-  return { default: fake, isElectronRuntime: () => false };
+  return fake;
 });
 
 // Mock the file system service. FileSystemProvider's mount effect calls
@@ -36,6 +50,7 @@ vi.mock('../services/fileSystem', () => {
       createFolder: vi.fn(async () => ({ success: true })),
       deletePath: vi.fn(async () => ({ success: true })),
       renamePath: vi.fn(async () => ({ success: true })),
+      getHomeDir: vi.fn(async () => '/home/test'),
     },
   };
 });
@@ -54,15 +69,18 @@ vi.mock('../components/ui/Toast', () => {
   };
 });
 
-import storageService from '../services/storageService';
+import * as appConfigStoreModule from '../services/appConfigStore';
 import fsService from '../services/fileSystem';
 import { FileSystemProvider, useFileSystem } from '../context/FileSystemContext';
 import type { RecentWorkspace } from '../types/workspace';
 
-const fakeStorage = storageService as unknown as {
-  get: ReturnType<typeof vi.fn>;
-  set: ReturnType<typeof vi.fn>;
-  __store: Map<string, unknown>;
+const fakeAppConfig = appConfigStoreModule as unknown as {
+  loadRecentWorkspaces: ReturnType<typeof vi.fn>;
+  saveRecentWorkspaces: ReturnType<typeof vi.fn>;
+  loadLastOpenedWorkspace: ReturnType<typeof vi.fn>;
+  saveLastOpenedWorkspace: ReturnType<typeof vi.fn>;
+  __recentsRef: { value: unknown };
+  __lastOpenedRef: { value: string | null };
   __reset: () => void;
 };
 
@@ -111,16 +129,38 @@ function makeProbe(label: string, apiSink: { current: ActionsApi | null }) {
 }
 
 beforeEach(() => {
-  fakeStorage.__reset();
-  fakeStorage.get.mockClear();
-  fakeStorage.set.mockClear();
+  fakeAppConfig.__reset();
+  fakeAppConfig.loadRecentWorkspaces.mockClear();
+  fakeAppConfig.saveRecentWorkspaces.mockClear();
+  fakeAppConfig.loadLastOpenedWorkspace.mockClear();
+  fakeAppConfig.saveLastOpenedWorkspace.mockClear();
   fakeFs.readDirectory.mockClear();
   fakeFs.readDirectory.mockImplementation(async () => []);
 });
 
 describe('FileSystemProvider per-window recentWorkspaces', () => {
-  it('happy path: window mounts with stored [a, b], opens c → state [c, a, b], storage [c, a, b]', async () => {
-    fakeStorage.__store.set('recentWorkspaces', [makeRecent('/a'), makeRecent('/b')]);
+  it('mount effect calls loadRecentWorkspaces and loadLastOpenedWorkspace exactly once', async () => {
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
+
+    const apiRef: { current: ActionsApi | null } = { current: null };
+    const Probe = makeProbe('w1', apiRef);
+
+    const { getByTestId } = render(
+      <FileSystemProvider>
+        <Probe />
+      </FileSystemProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId('recents:w1').textContent).toBe('/a,/b');
+    });
+
+    expect(fakeAppConfig.loadRecentWorkspaces).toHaveBeenCalledTimes(1);
+    expect(fakeAppConfig.loadLastOpenedWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it('happy path: window mounts with stored [a, b], opens c → state [c, a, b], on-disk [c, a, b]', async () => {
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
 
     const apiRef: { current: ActionsApi | null } = { current: null };
     const Probe = makeProbe('w1', apiRef);
@@ -144,14 +184,20 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(getByTestId('recents:w1').textContent).toBe('/c,/a,/b');
     });
 
-    const stored = fakeStorage.__store.get('recentWorkspaces') as RecentWorkspace[];
-    expect(stored.map(r => r.path)).toEqual(['/c', '/a', '/b']);
+    // updateRecentWorkspaces called saveRecentWorkspaces with the new list.
+    const lastCall = fakeAppConfig.saveRecentWorkspaces.mock.calls.at(-1);
+    expect(lastCall).toBeTruthy();
+    const persistedList = lastCall![0] as RecentWorkspace[];
+    expect(persistedList.map((r) => r.path)).toEqual(['/c', '/a', '/b']);
+
+    const stored = fakeAppConfig.__recentsRef.value as RecentWorkspace[];
+    expect(stored.map((r) => r.path)).toEqual(['/c', '/a', '/b']);
   });
 
   it('per-window contract: window 1 does not pick up window 2 writes after mount', async () => {
-    // Both windows mount against the same shared storage with the same
+    // Both windows mount against the same shared store with the same
     // initial snapshot.
-    fakeStorage.__store.set('recentWorkspaces', [makeRecent('/a'), makeRecent('/b')]);
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
 
     const w1ApiRef: { current: ActionsApi | null } = { current: null };
     const W1Probe = makeProbe('w1', w1ApiRef);
@@ -165,7 +211,7 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(win1.getByTestId('recents:w1').textContent).toBe('/a,/b');
     });
 
-    // Window 1 opens /c. It writes [c, a, b] back to storage.
+    // Window 1 opens /c. It writes [c, a, b] back to the store.
     await act(async () => {
       await w1ApiRef.current!.update('/c');
     });
@@ -173,7 +219,7 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(win1.getByTestId('recents:w1').textContent).toBe('/c,/a,/b');
     });
 
-    // Window 2 mounts now — it reads storage once and sees [c, a, b].
+    // Window 2 mounts now — it reads once and sees [c, a, b].
     const w2ApiRef: { current: ActionsApi | null } = { current: null };
     const W2Probe = makeProbe('w2', w2ApiRef);
     const win2 = render(
@@ -186,7 +232,7 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(win2.getByTestId('recents:w2').textContent).toBe('/c,/a,/b');
     });
 
-    // Window 2 opens /d. Its state and storage become [d, c, a, b].
+    // Window 2 opens /d. Its state and the store become [d, c, a, b].
     await act(async () => {
       await w2ApiRef.current!.update('/d');
     });
@@ -195,18 +241,18 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(win2.getByTestId('recents:w2').textContent).toBe('/d,/c,/a,/b');
     });
 
-    // Storage now reflects window 2's last write.
-    const stored = fakeStorage.__store.get('recentWorkspaces') as RecentWorkspace[];
+    // The store now reflects window 2's last write.
+    const stored = fakeAppConfig.__recentsRef.value as RecentWorkspace[];
     expect(stored.map(r => r.path)).toEqual(['/d', '/c', '/a', '/b']);
 
     // CRITICAL: window 1 still reflects ONLY its own additions atop the
-    // snapshot at its mount time. It does NOT re-read from storage to pick
-    // up /d. This is the per-window contract.
+    // snapshot at its mount time. It does NOT re-read to pick up /d.
+    // This is the per-window contract.
     expect(win1.getByTestId('recents:w1').textContent).toBe('/c,/a,/b');
   });
 
   it('clearRecentWorkspaces in window 1 does not clear window 2\'s in-memory list', async () => {
-    fakeStorage.__store.set('recentWorkspaces', [makeRecent('/a'), makeRecent('/b')]);
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
 
     const w1ApiRef: { current: ActionsApi | null } = { current: null };
     const W1Probe = makeProbe('w1', w1ApiRef);
@@ -246,8 +292,8 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
     expect(win2.getByTestId('recents:w2').textContent).toBe('/a,/b');
   });
 
-  it('removeFromRecentWorkspaces with a path not in local state is a no-op (no spurious storage write)', async () => {
-    fakeStorage.__store.set('recentWorkspaces', [makeRecent('/a'), makeRecent('/b')]);
+  it('removeFromRecentWorkspaces with a path not in local state is a no-op (no spurious save)', async () => {
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
 
     const apiRef: { current: ActionsApi | null } = { current: null };
     const Probe = makeProbe('w1', apiRef);
@@ -261,7 +307,7 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(getByTestId('recents:w1').textContent).toBe('/a,/b');
     });
 
-    const setCallsBefore = fakeStorage.set.mock.calls.length;
+    const saveCallsBefore = fakeAppConfig.saveRecentWorkspaces.mock.calls.length;
 
     await act(async () => {
       await apiRef.current!.remove('/not-in-list');
@@ -269,12 +315,12 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
 
     // State unchanged.
     expect(getByTestId('recents:w1').textContent).toBe('/a,/b');
-    // No new storage write fired.
-    expect(fakeStorage.set.mock.calls.length).toBe(setCallsBefore);
+    // No new save fired.
+    expect(fakeAppConfig.saveRecentWorkspaces.mock.calls.length).toBe(saveCallsBefore);
   });
 
   it('updateRecentWorkspaces dedupes when the same path is added twice in a row', async () => {
-    fakeStorage.__store.set('recentWorkspaces', [makeRecent('/a')]);
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a')];
 
     const apiRef: { current: ActionsApi | null } = { current: null };
     const Probe = makeProbe('w1', apiRef);
@@ -311,7 +357,7 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
   it('updateRecentWorkspaces enforces the 10-entry cap', async () => {
     // Pre-fill 10 entries.
     const initial = Array.from({ length: 10 }, (_, i) => makeRecent(`/p${i}`));
-    fakeStorage.__store.set('recentWorkspaces', initial);
+    fakeAppConfig.__recentsRef.value = initial;
 
     const apiRef: { current: ActionsApi | null } = { current: null };
     const Probe = makeProbe('w1', apiRef);
@@ -340,12 +386,12 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       expect(recents[1].path).toBe('/p0');
     });
 
-    const stored = fakeStorage.__store.get('recentWorkspaces') as RecentWorkspace[];
+    const stored = fakeAppConfig.__recentsRef.value as RecentWorkspace[];
     expect(stored.length).toBe(10);
   });
 
-  it('integration: after selectFolder succeeds, the new entry appears at the top of local recents', async () => {
-    fakeStorage.__store.set('recentWorkspaces', [makeRecent('/a'), makeRecent('/b')]);
+  it('integration: after selectFolder succeeds, the new entry appears at the top of local recents AND saveLastOpenedWorkspace is called', async () => {
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
 
     const apiRef: { current: ActionsApi | null } = { current: null };
     const Probe = makeProbe('w1', apiRef);
@@ -363,10 +409,37 @@ describe('FileSystemProvider per-window recentWorkspaces', () => {
       await apiRef.current!.selectFolder('/c');
     });
 
-    // selectFolder calls updateRecentWorkspaces fire-and-forget. Wait for the
-    // state to reflect the update.
+    // selectFolder calls updateRecentWorkspaces fire-and-forget. Wait for
+    // the state to reflect the update.
     await waitFor(() => {
       expect(getByTestId('recents:w1').textContent).toBe('/c,/a,/b');
+    });
+
+    // selectFolder also persists the last-opened workspace path.
+    expect(fakeAppConfig.saveLastOpenedWorkspace).toHaveBeenCalledWith('/c');
+  });
+
+  it('mount effect auto-opens lastOpenedWorkspace when present', async () => {
+    fakeAppConfig.__recentsRef.value = [makeRecent('/a'), makeRecent('/b')];
+    fakeAppConfig.__lastOpenedRef.value = '/b';
+
+    // Track which path readDirectory was called with for the auto-open.
+    const readCalls: string[] = [];
+    fakeFs.readDirectory.mockImplementation(async (p: string) => {
+      readCalls.push(p);
+      return [];
+    });
+
+    render(
+      <FileSystemProvider>
+        <div data-testid="probe">probe</div>
+      </FileSystemProvider>,
+    );
+
+    await waitFor(() => {
+      // The mount effect should have called readDirectory at least once
+      // for the lastOpened workspace path.
+      expect(readCalls).toContain('/b');
     });
   });
 });
