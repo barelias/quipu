@@ -94,12 +94,27 @@ export default function PaneView({
   const toggleFindRef = useRef<(() => void) | null>(null);
   const toggleEditorModeRef = useRef<(() => void) | null>(null);
   const latestScrollTopRef = useRef<number | null>(null);
+  // The TipTap editor instance reported by Editor's onEditorReady. Held here so
+  // we can re-register it under a new pane id when pane.id changes (which
+  // happens when secondary is promoted to primary after a pane closes).
+  const currentEditorRef = useRef<TiptapEditor | null>(null);
 
   // Register this pane's ref bag with App on mount; deregister on unmount.
+  // When pane.id changes (secondary→primary promotion path), the cleanup runs
+  // with the OLD id and the new effect runs with the NEW id, so the registry
+  // ends up keyed only by ids that are currently in PaneState.
   useEffect(() => {
     registerPaneRefs(pane.id, { toggleFindRef, toggleEditorModeRef, latestScrollTopRef });
-    return () => { registerPaneRefs(pane.id, null); };
-  }, [pane.id, registerPaneRefs]);
+    // Also re-register the editor instance under the new id so App's per-pane
+    // editor registry tracks the live editor (not a stale dead one).
+    if (currentEditorRef.current) {
+      onEditorReady(pane.id, currentEditorRef.current);
+    }
+    return () => {
+      registerPaneRefs(pane.id, null);
+      onEditorReady(pane.id, null);
+    };
+  }, [pane.id, registerPaneRefs, onEditorReady]);
 
   // Resolve this pane's active tab + active file from the flat openTabs list.
   const activeTab = useMemo(
@@ -130,6 +145,7 @@ export default function PaneView({
   }, [activeFile, isFocused, pane.activeTabId, setIsDirty, updateTabContent]);
 
   const handleEditorReady = useCallback((editor: TiptapEditor) => {
+    currentEditorRef.current = editor;
     onEditorReady(pane.id, editor);
   }, [pane.id, onEditorReady]);
 

@@ -224,6 +224,45 @@ describe('TabContext — pane lifecycle (B1)', () => {
     expect(get().primary.activeTabId).toBe(tabB);
   });
 
+  it('closeOtherTabs falls back to first surviving tab when previous active was closed (cross-pane)', async () => {
+    const get = await withProvider(['/workspace/a.md', '/workspace/b.md', '/workspace/c.md', '/workspace/d.md']);
+    const tabA = get().openTabs[0].id;
+    const tabB = get().openTabs[1].id;
+    const tabC = get().openTabs[2].id;
+    const tabD = get().openTabs[3].id;
+
+    // Set up:
+    //   primary   = [B, C]  active = C
+    //   secondary = [A, D]  active = A;  D is dirty (so it survives closeOtherTabs)
+    act(() => { get().splitToRight(tabA); });           // moves A to new secondary
+    await waitFor(() => { expect(get().secondary).not.toBeNull(); });
+    act(() => { get().moveTabToPane(tabD, 'pane-2'); }); // moves D to secondary (after A)
+    await waitFor(() => { expect(get().secondary?.tabIds).toContain(tabD); });
+    act(() => { get().setTabDirty(tabD, true); });
+    act(() => { get().switchTab(tabC); });
+    await waitFor(() => { expect(get().primary.activeTabId).toBe(tabC); });
+    act(() => { get().switchTab(tabA); });
+    await waitFor(() => { expect(get().secondary?.activeTabId).toBe(tabA); });
+
+    // Right-click B in primary → "Close Other Tabs". Survivors:
+    //   - tabB (target)
+    //   - tabD (dirty in secondary)
+    // primary = [B], secondary = [D].
+    // Bug being guarded: secondary's previous activeTabId was tabA, which is
+    // now closed; before the fix, secondary.activeTabId would have fallen
+    // through to null, leaving the secondary pane's editor pointing at
+    // nothing even though tabD is right there. After the fix, it falls back
+    // to the first surviving tab in the pane.
+    act(() => { get().closeOtherTabs(tabB); });
+
+    await waitFor(() => {
+      expect(get().primary.tabIds).toEqual([tabB]);
+    });
+    expect(get().primary.activeTabId).toBe(tabB);
+    expect(get().secondary?.tabIds).toEqual([tabD]);
+    expect(get().secondary?.activeTabId).toBe(tabD);
+  });
+
   it('panesAsArray returns one pane when single-pane and two when split', async () => {
     const get = await withProvider(['/workspace/a.md', '/workspace/b.md']);
     expect(get().panesAsArray()).toHaveLength(1);

@@ -198,6 +198,14 @@ function AppContent() {
     setActiveDiff(null);
   }, [activeTabId]);
 
+  // The DndContext only mounts when activeDiff is null. If the diff opens
+  // mid-drag, the DndContext unmounts before any drag-end / drag-cancel event
+  // can fire, leaving isTabDragActive stuck at true; the right-edge drop zone
+  // would then block clicks once the diff closes. Reset on diff state change.
+  useEffect(() => {
+    if (activeDiff !== null) setIsTabDragActive(false);
+  }, [activeDiff]);
+
   // Plugin loader startup — runs once after mount.
   // Registers built-in commands (via appActionsRef) and keybindings, then loads plugins.
   useEffect(() => {
@@ -423,7 +431,12 @@ function AppContent() {
     save: () => {
       if (activeFile && activeTab) {
         const ext = getExtensionForTab(activeTab);
-        saveFile((ext !== null || editorRawMode) ? null : editorInstance);
+        // Read from the per-pane registry rather than `editorInstance` state
+        // so a save fired in the brief window between activePaneId change and
+        // the new pane's Editor reporting via onEditorReady targets the right
+        // editor (or no editor) rather than the previous one.
+        const activeEditor = editorInstancesRef.current[activePaneId] ?? editorInstance;
+        saveFile((ext !== null || editorRawMode) ? null : activeEditor);
       }
     },
     toggleSidebar: handleToggleSidebar,
@@ -457,8 +470,20 @@ function AppContent() {
     find: () => { getActivePaneToggleFind()?.(); },
     splitRight: () => {
       // Split the active pane's active tab off into a new secondary pane.
-      // splitToRight no-ops when already split or when the source pane has < 2 tabs.
-      if (activeTabId) splitToRight(activeTabId);
+      // Surface a toast for the gated cases so Cmd+\\ doesn't silently no-op.
+      if (!activeTabId) {
+        showToast('Open a file before splitting', 'info');
+        return;
+      }
+      if (secondary !== null) {
+        showToast('Editor is already split', 'info');
+        return;
+      }
+      if (primary.tabIds.length < 2) {
+        showToast('Open another file first to split', 'info');
+        return;
+      }
+      splitToRight(activeTabId);
     },
   };
 

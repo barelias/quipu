@@ -829,11 +829,23 @@ export function TabProvider({ children }: TabProviderProps) {
       const survivingIds = new Set<string>([tabId]);
       // Add any dirty tabs back
       for (const t of openTabs) if (t.isDirty) survivingIds.add(t.id);
-      const filterPane = (p: Pane): Pane => ({
-        ...p,
-        tabIds: p.tabIds.filter(id => survivingIds.has(id)),
-        activeTabId: p.tabIds.includes(tabId) ? tabId : (p.activeTabId && survivingIds.has(p.activeTabId) ? p.activeTabId : null),
-      });
+      const filterPane = (p: Pane): Pane => {
+        const tabIds = p.tabIds.filter(id => survivingIds.has(id));
+        // Active-tab resolution priority:
+        //   1. The explicit `tabId` argument if this pane contains it.
+        //   2. The pane's previous active if it survived.
+        //   3. First surviving tab in this pane (don't fall through to null
+        //      when the pane still has tabs — that orphans the pane's UI).
+        let activeTabId: string | null = null;
+        if (p.tabIds.includes(tabId)) {
+          activeTabId = tabId;
+        } else if (p.activeTabId && survivingIds.has(p.activeTabId)) {
+          activeTabId = p.activeTabId;
+        } else if (tabIds.length > 0) {
+          activeTabId = tabIds[0];
+        }
+        return { ...p, tabIds, activeTabId };
+      };
       const nextPrimary = filterPane(prev.primary);
       const nextSecondary = prev.secondary ? filterPane(prev.secondary) : null;
       const targetPaneId = nextPrimary.tabIds.includes(tabId) ? nextPrimary.id : (nextSecondary?.tabIds.includes(tabId) ? nextSecondary.id : nextPrimary.id);
