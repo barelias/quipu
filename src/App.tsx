@@ -2,16 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { IconContext } from '@phosphor-icons/react';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import type { Editor } from '@tiptap/react';
-import Editor_ from './components/editor/Editor';
 import Terminal from './components/ui/Terminal';
 import { Dialog } from 'radix-ui';
-import TabBar from './components/ui/TabBar';
+import PaneView from './components/ui/PaneView';
 import ActivityBar from './components/ui/ActivityBar';
 import QuickOpen from './components/ui/QuickOpen';
 import TitleBar from './components/ui/TitleBar';
 import ContextMenu from './components/ui/ContextMenu';
 import FolderPicker from './components/ui/FolderPicker';
-import FileConflictBar from './components/ui/FileConflictBar';
 import { WorkspaceProvider } from './context/WorkspaceContext';
 import { useFileSystem } from './context/FileSystemContext';
 import { useTab } from './context/TabContext';
@@ -24,7 +22,7 @@ import kernelServiceInstance from './services/kernelService';
 import terminalServiceInstance from './services/terminalService';
 import claudeInstaller from './services/claudeInstaller';
 import DiffViewer from './extensions/diff-viewer/DiffViewer';
-import { resolveViewer, registerExtension, getExtensionForTab, getCommandsForTab } from './extensions/registry';
+import { registerExtension, getExtensionForTab, getCommandsForTab } from './extensions/registry';
 import { getRegisteredPanels, registerPanel } from './extensions/panelRegistry';
 import { registerCommand, executeCommand } from './extensions/commandRegistry';
 import { registerKeybinding, resolveKeybinding } from './extensions/keybindingRegistry';
@@ -60,12 +58,29 @@ function AppContent() {
   const [editorRawMode, setEditorRawMode] = useState<boolean>(false);
   // Incremented after plugins finish loading so resolveViewer re-runs for already-open tabs.
   const [, setPluginRevision] = useState(0);
-  const toggleEditorModeRef = React.useRef<(() => void) | null>(null);
-  const toggleFindRef = React.useRef<(() => void) | null>(null);
-  // Editor mirrors its scroll container's scrollTop into this ref so the pre-switch
-  // snapshot effect below can read the live value even after Editor unmounts (e.g.,
-  // when switching to a chat/agent tab that replaces the Editor with ChatView).
-  const latestScrollTopRef = React.useRef<number | null>(null);
+
+  // Per-pane editor registry. PaneView calls handlePaneEditorReady on mount/unmount;
+  // we mirror the active pane's editor into `editorInstance` state so the rest of
+  // the app (menu actions, keyboard shortcuts, pre-switch snapshot effect) keeps
+  // its single-editor mental model. When the active pane changes, the effect
+  // below resyncs `editorInstance` to that pane's slot.
+  const editorInstancesRef = React.useRef<Record<string, Editor | null>>({});
+  // Per-pane ref bags (toggleFindRef, toggleEditorModeRef, latestScrollTopRef).
+  // PaneView owns these MutableRefObjects internally and registers them here on mount.
+  const paneRefsRef = React.useRef<Record<string, import('./components/ui/PaneView').PaneRefBag | null>>({});
+
+  const handlePaneEditorReady = useCallback((paneId: string, editor: Editor | null) => {
+    editorInstancesRef.current[paneId] = editor;
+    // Editor's onEditorReady fires inside a useEffect after mount; we don't know
+    // here whether this pane is the active one. The sync effect below picks it up.
+    setEditorInstance(prev => prev === editor ? prev : editor);
+  }, []);
+
+  const registerPaneRefs = useCallback((paneId: string, refs: import('./components/ui/PaneView').PaneRefBag | null) => {
+    if (refs) paneRefsRef.current[paneId] = refs;
+    else delete paneRefsRef.current[paneId];
+  }, []);
+
   const {
     workspacePath, showFolderPicker, selectFolder, cancelFolderPicker, revealFolder, openFolder,
   } = useFileSystem();
@@ -77,7 +92,19 @@ function AppContent() {
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
     resolveConflictReload, resolveConflictKeep, resolveConflictDismiss,
     reloadTabFromDisk,
+    primary, secondary, activePaneId,
   } = useTab();
+  // Helpers that read from the active pane's per-pane ref bag.
+  const getActivePaneToggleFind = () => paneRefsRef.current[activePaneId]?.toggleFindRef.current ?? null;
+  const getActivePaneToggleEditorMode = () => paneRefsRef.current[activePaneId]?.toggleEditorModeRef.current ?? null;
+  const getActivePaneLatestScrollTop = () => paneRefsRef.current[activePaneId]?.latestScrollTopRef.current ?? null;
+
+  // When the active pane changes, sync `editorInstance` state to that pane's editor
+  // so global commands (Save, Find, etc.) and the pre-switch snapshot effect target
+  // the right editor.
+  useEffect(() => {
+    setEditorInstance(editorInstancesRef.current[activePaneId] ?? null);
+  }, [activePaneId]);
   const {
     terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
     sendToTerminal, clearTerminal, getTerminalSelection, hasTerminalSelection,
@@ -119,7 +146,7 @@ function AppContent() {
       // Only snapshot here if Editor is about to unmount (non-Editor tab)
       // For Editor-to-Editor switches, Editor.jsx handles the snapshot internally
       if (isNewTabNonEditor && editorInstance && !editorInstance.isDestroyed) {
-        snapshotTab(prevId, editorInstance.getJSON(), latestScrollTopRef.current ?? 0);
+        snapshotTab(prevId, editorInstance.getJSON(), getActivePaneLatestScrollTop() ?? 0);
       }
     }
   }, [activeTabId, editorInstance, snapshotTab, openTabs]);
@@ -383,7 +410,7 @@ function AppContent() {
     sendToTerminal: handleSendToTerminal,
     sendToClaude: handleSendToClaude,
     reloadFromDisk: () => { if (activeTabId) reloadTabFromDisk(activeTabId); },
-    find: () => { toggleFindRef.current?.(); },
+    find: () => { getActivePaneToggleFind()?.(); },
   };
 
   // Keyboard shortcuts — all shortcuts are driven by the keybinding registry.
@@ -624,19 +651,9 @@ function AppContent() {
     return () => document.removeEventListener('contextmenu', handleContextMenu);
   }, [editorInstance, closeTab, openTabs]);
 
-  const handleEditorReady = useCallback((editor: Editor) => {
-    setEditorInstance(editor);
-  }, []);
-
-  const handleContentChange = useCallback((content?: string) => {
-    if (activeFile) {
-      setIsDirty(true);
-      // For non-TipTap editors (e.g., Excalidraw), store updated content on the tab
-      if (typeof content === 'string') {
-        updateTabContent(activeTabId!, content);
-      }
-    }
-  }, [activeFile, activeTabId, setIsDirty, updateTabContent]);
+  // Editor instance + content-change handlers now live in PaneView (per pane).
+  // App tracks the active pane's editor via handlePaneEditorReady (above) and
+  // the activePaneId-sync effect.
 
   const handleMenuAction = useCallback((action: string) => {
     switch (action) {
@@ -716,7 +733,7 @@ function AppContent() {
         handleSendToClaude();
         break;
       case 'editor.toggleMode':
-        toggleEditorModeRef.current?.();
+        getActivePaneToggleEditorMode()?.();
         break;
       default: {
         // Delegate to extension commands (e.g., kernel.runAll, kernel.interrupt, kernel.restart)
@@ -901,63 +918,40 @@ function AppContent() {
         <Panel>
           <Group orientation="vertical" style={{ height: '100%' }}>
             <Panel minSize={100}>
-              <div className="h-full flex flex-col overflow-hidden relative">
-                <div data-context="tab-bar">
-                  <TabBar />
-                </div>
-                {activeTab?.hasConflict && (
-                  <FileConflictBar
-                    fileName={activeTab.name}
-                    onReload={() => resolveConflictReload(activeTab.id)}
-                    onKeep={() => resolveConflictKeep(activeTab.id)}
-                    onDismiss={() => resolveConflictDismiss(activeTab.id)}
-                  />
-                )}
-                {activeDiff ? (
+              {activeDiff ? (
+                <div className="h-full flex flex-col overflow-hidden relative">
                   <DiffViewer
                     filePath={activeDiff.filePath}
                     diffText={activeDiff.diffText}
                     isStaged={activeDiff.isStaged}
                     onClose={() => setActiveDiff(null)}
                   />
-                ) : activeFile && activeTab ? (
-                  (() => {
-                    const Viewer = resolveViewer(activeTab, activeFile);
-                    return Viewer ? (
-                      <Viewer tab={activeTab} activeFile={activeFile} onContentChange={handleContentChange} isActive workspacePath={workspacePath ?? ''} showToast={showToast} />
-                    ) : (
-                      <Editor_
-                        onEditorReady={handleEditorReady}
-                        onContentChange={handleContentChange}
-                        onRawModeChange={setEditorRawMode}
-                        onToggleEditorModeRef={toggleEditorModeRef}
-                        onToggleFindRef={toggleFindRef}
-                        latestScrollTopRef={latestScrollTopRef}
-                        activeFile={activeFile}
-                        activeTabId={activeTabId}
-                        activeTab={activeTab}
-                        snapshotTab={snapshotTab}
-                        workspacePath={workspacePath}
-                        openFile={openFile}
-                        revealFolder={revealFolder}
-                        updateFrontmatter={updateFrontmatter}
-                        addFrontmatterProperty={addFrontmatterProperty}
-                        removeFrontmatterProperty={removeFrontmatterProperty}
-                        renameFrontmatterKey={renameFrontmatterKey}
-                        toggleFrontmatterCollapsed={toggleFrontmatterCollapsed}
-                        addFrontmatterTag={addFrontmatterTag}
-                        removeFrontmatterTag={removeFrontmatterTag}
-                        updateFrontmatterTag={updateFrontmatterTag}
-                      />
-                    );
-                  })()
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full w-full bg-bg-surface">
-                    <div className="text-xl text-text-primary opacity-50 mb-2">Open a file to start editing</div>
-                    <div className="text-sm text-text-primary opacity-35 italic">Use the Explorer or press Ctrl+P</div>
-                  </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <Group orientation="horizontal" style={{ height: '100%' }}>
+                  <Panel minSize={20}>
+                    <PaneView
+                      pane={primary}
+                      onEditorReady={handlePaneEditorReady}
+                      registerPaneRefs={registerPaneRefs}
+                      onRawModeChange={setEditorRawMode}
+                    />
+                  </Panel>
+                  {secondary !== null && (
+                    <>
+                      <Separator className="shrink-0 w-px cursor-col-resize bg-border" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />
+                      <Panel minSize={20}>
+                        <PaneView
+                          pane={secondary}
+                          onEditorReady={handlePaneEditorReady}
+                          registerPaneRefs={registerPaneRefs}
+                          onRawModeChange={setEditorRawMode}
+                        />
+                      </Panel>
+                    </>
+                  )}
+                </Group>
+              )}
             </Panel>
             <Separator className="shrink-0 h-px cursor-row-resize bg-border transition-colors hover:bg-accent/50 active:bg-accent" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />
             <Panel

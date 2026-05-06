@@ -11,19 +11,11 @@ import {
   horizontalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import { XIcon, CircleIcon, RobotIcon, GearIcon, GitForkIcon } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useTab } from '../../context/TabContext';
-
-interface Tab {
-  id: string;
-  name: string;
-  path: string;
-  isDirty: boolean;
-  type?: string;
-}
+import type { Pane, Tab } from '../../types/tab';
 
 function tabTypeIcon(type: string | undefined): { Icon: PhosphorIcon; className: string } | null {
   switch (type) {
@@ -124,9 +116,25 @@ function SortableTab({ tab, isActive, onSwitch, onClose }: SortableTabProps) {
   );
 }
 
-export default function TabBar() {
-  const { openTabs, activeTabId, switchTab, closeTab, reorderTabs } = useTab();
+interface TabBarProps {
+  /** When provided, the bar renders only this pane's tabs and uses pane.activeTabId. */
+  pane?: Pane;
+}
+
+export default function TabBar({ pane }: TabBarProps = {}) {
+  const { openTabs, activeTabId, primary, switchTab, closeTab, reorderTabs } = useTab();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // When a pane is supplied, scope the bar to that pane's tab order; otherwise
+  // fall back to all openTabs (single-bar legacy mode).
+  const effectivePane = pane ?? primary;
+  const tabsById = new Map(openTabs.map(t => [t.id, t]));
+  const visibleTabs: Tab[] = pane
+    ? effectivePane.tabIds.map(id => tabsById.get(id)).filter((t): t is Tab => !!t)
+    : (openTabs as Tab[]);
+  const isActiveTab = (tabId: string) => pane
+    ? effectivePane.activeTabId === tabId
+    : tabId === activeTabId;
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -150,7 +158,7 @@ export default function TabBar() {
     }
   }, []);
 
-  if (openTabs.length === 0) return null;
+  if (visibleTabs.length === 0) return null;
 
   return (
     <div
@@ -159,14 +167,15 @@ export default function TabBar() {
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       onWheel={handleWheel}
       role="tablist"
+      data-pane-id={effectivePane.id}
     >
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <SortableContext items={openTabs.map(t => t.id)} strategy={horizontalListSortingStrategy}>
-          {openTabs.map((tab: Tab) => (
+        <SortableContext items={visibleTabs.map(t => t.id)} strategy={horizontalListSortingStrategy}>
+          {visibleTabs.map((tab: Tab) => (
             <SortableTab
               key={tab.id}
               tab={tab}
-              isActive={tab.id === activeTabId}
+              isActive={isActiveTab(tab.id)}
               onSwitch={switchTab}
               onClose={handleClose}
             />
