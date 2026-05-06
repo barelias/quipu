@@ -7,7 +7,10 @@ import storage from '../services/storageService';
 import { useToast } from '../components/ui/Toast';
 import { getExtensionForTab } from '../extensions/registry';
 import { useFileSystem } from './FileSystemContext';
-import type { Tab, ActiveFile, Frontmatter } from '../types/tab';
+import type { Tab, ActiveFile, Frontmatter, Pane } from '../types/tab';
+
+const PRIMARY_PANE_ID = 'pane-1';
+const SECONDARY_PANE_ID = 'pane-2';
 import type { JSONContent } from '@tiptap/react';
 import type { Editor } from '@tiptap/react';
 
@@ -83,6 +86,20 @@ export interface TabContextValue {
   snapshotTab: (tabId: string, tiptapJSON: JSONContent | null, scrollPosition: number) => void;
   reloadTabFromDisk: (tabId: string) => Promise<void>;
 
+  // Pane state and operations (max two panes; secondary is null until split)
+  primary: Pane;
+  secondary: Pane | null;
+  activePaneId: string;
+  panesAsArray: () => Pane[];
+  /** Resolve which pane currently owns a tab. Returns null if the tab is not in any pane. */
+  getTabPaneId: (tabId: string) => string | null;
+  /** Create a second pane to the right and move the tab into it. No-op if already split or if `tabId` is the only tab in its source pane. */
+  splitToRight: (tabId: string) => void;
+  /** Move a tab between panes. */
+  moveTabToPane: (tabId: string, targetPaneId: string, index?: number) => void;
+  /** Mark a pane as the focused pane. Used by `<PaneView>` on click/focus. */
+  setActivePaneId: (paneId: string) => void;
+
   // Conflict resolution
   resolveConflictReload: (tabId: string) => Promise<void>;
   resolveConflictKeep: (tabId: string) => void;
@@ -116,7 +133,76 @@ export function TabProvider({ children }: TabProviderProps) {
 
   // --- State ---
   const [openTabs, setOpenTabs] = useState<Tab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  // Pane layout state — combined into one object so mutations that touch
+  // multiple fields (split, close-empty-pane, cross-pane move) are atomic.
+  interface PaneState {
+    primary: Pane;
+    secondary: Pane | null;
+    activePaneId: string;
+  }
+  const [paneState, setPaneState] = useState<PaneState>({
+    primary: { id: PRIMARY_PANE_ID, tabIds: [], activeTabId: null },
+    secondary: null,
+    activePaneId: PRIMARY_PANE_ID,
+  });
+  const { primary, secondary, activePaneId } = paneState;
+  const activeTabId: string | null =
+    activePaneId === primary.id ? primary.activeTabId : secondary?.activeTabId ?? null;
+
+  // Pane state mutation helpers. All take the current PaneState and return
+  // the next one; callers wrap them in setPaneState(prev => ...) so the
+  // updates run inside React's batched state-update path.
+  const addTabToPane = (s: PaneState, paneId: string, tabId: string, index?: number): PaneState => {
+    const target = s.primary.id === paneId ? s.primary : s.secondary;
+    if (!target) return s;
+    const tabIds = [...target.tabIds];
+    if (index === undefined || index < 0 || index > tabIds.length) tabIds.push(tabId);
+    else tabIds.splice(index, 0, tabId);
+    const next = { ...target, tabIds, activeTabId: tabId };
+    return s.primary.id === paneId
+      ? { ...s, primary: next, activePaneId: paneId }
+      : { ...s, secondary: next, activePaneId: paneId };
+  };
+
+  const removeTabFromPane = (s: PaneState, paneId: string, tabId: string): PaneState => {
+    const target = s.primary.id === paneId ? s.primary : s.secondary;
+    if (!target) return s;
+    const tabIds = target.tabIds.filter(id => id !== tabId);
+    let nextActive = target.activeTabId;
+    if (nextActive === tabId) {
+      const idx = target.tabIds.indexOf(tabId);
+      nextActive = tabIds[Math.min(idx, tabIds.length - 1)] ?? null;
+    }
+    const next = { ...target, tabIds, activeTabId: nextActive };
+    return s.primary.id === paneId
+      ? { ...s, primary: next }
+      : { ...s, secondary: next };
+  };
+
+  // After a removal, drop the secondary pane if empty (or promote it to primary
+  // if primary became empty while secondary still has tabs).
+  const collapseEmptyPanes = (s: PaneState): PaneState => {
+    if (s.secondary === null) return s;
+    const primaryEmpty = s.primary.tabIds.length === 0;
+    const secondaryEmpty = s.secondary.tabIds.length === 0;
+    if (secondaryEmpty) {
+      return {
+        primary: s.primary,
+        secondary: null,
+        activePaneId: s.primary.id,
+      };
+    }
+    if (primaryEmpty) {
+      // Promote secondary into the primary slot so a single pane is always `primary`.
+      return {
+        primary: { ...s.secondary, id: PRIMARY_PANE_ID },
+        secondary: null,
+        activePaneId: PRIMARY_PANE_ID,
+      };
+    }
+    return s;
+  };
 
   // Ref to access current openTabs inside intervals/event listeners without stale closures
   const openTabsRef = useRef<Tab[]>(openTabs);
@@ -176,7 +262,84 @@ export function TabProvider({ children }: TabProviderProps) {
   }, [showToast]);
 
   const switchTab = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
+    setPaneState(prev => {
+      // Resolve which pane currently owns the tab. If neither does (shouldn't
+      // happen in normal flow), default to active pane and add it there.
+      const inPrimary = prev.primary.tabIds.includes(tabId);
+      const inSecondary = prev.secondary?.tabIds.includes(tabId) ?? false;
+      const targetPaneId = inPrimary ? prev.primary.id : inSecondary ? prev.secondary!.id : prev.activePaneId;
+      const target = targetPaneId === prev.primary.id ? prev.primary : prev.secondary;
+      if (!target) return prev;
+      // Append to target pane if not already present (defensive — should be present)
+      const tabIds = target.tabIds.includes(tabId) ? target.tabIds : [...target.tabIds, tabId];
+      const nextPane: Pane = { ...target, tabIds, activeTabId: tabId };
+      return targetPaneId === prev.primary.id
+        ? { ...prev, primary: nextPane, activePaneId: targetPaneId }
+        : { ...prev, secondary: nextPane, activePaneId: targetPaneId };
+    });
+  }, []);
+
+  const setActivePaneId = useCallback((paneId: string) => {
+    setPaneState(prev => {
+      if (prev.activePaneId === paneId) return prev;
+      // Reject focus on a pane that doesn't exist
+      if (paneId !== prev.primary.id && paneId !== prev.secondary?.id) return prev;
+      return { ...prev, activePaneId: paneId };
+    });
+  }, []);
+
+  const getTabPaneId = useCallback((tabId: string): string | null => {
+    if (paneState.primary.tabIds.includes(tabId)) return paneState.primary.id;
+    if (paneState.secondary?.tabIds.includes(tabId)) return paneState.secondary.id;
+    return null;
+  }, [paneState]);
+
+  const panesAsArray = useCallback((): Pane[] => {
+    return paneState.secondary ? [paneState.primary, paneState.secondary] : [paneState.primary];
+  }, [paneState]);
+
+  const splitToRight = useCallback((tabId: string) => {
+    setPaneState(prev => {
+      // Already split — no-op
+      if (prev.secondary !== null) return prev;
+      // Source pane must have at least 2 tabs (otherwise the split would empty it)
+      if (!prev.primary.tabIds.includes(tabId)) return prev;
+      if (prev.primary.tabIds.length < 2) return prev;
+
+      const remainingTabIds = prev.primary.tabIds.filter(id => id !== tabId);
+      // Pick a new active tab for primary if the moved tab was active there
+      const nextPrimaryActive = prev.primary.activeTabId === tabId
+        ? remainingTabIds[remainingTabIds.length - 1] ?? null
+        : prev.primary.activeTabId;
+      return {
+        primary: { ...prev.primary, tabIds: remainingTabIds, activeTabId: nextPrimaryActive },
+        secondary: { id: SECONDARY_PANE_ID, tabIds: [tabId], activeTabId: tabId },
+        activePaneId: SECONDARY_PANE_ID,
+      };
+    });
+  }, []);
+
+  const moveTabToPane = useCallback((tabId: string, targetPaneId: string, index?: number) => {
+    setPaneState(prev => {
+      // Determine source pane
+      const inPrimary = prev.primary.tabIds.includes(tabId);
+      const inSecondary = prev.secondary?.tabIds.includes(tabId) ?? false;
+      if (!inPrimary && !inSecondary) return prev;
+      const sourcePaneId = inPrimary ? prev.primary.id : prev.secondary!.id;
+      if (sourcePaneId === targetPaneId) return prev;
+
+      // Target must exist
+      const targetPane = targetPaneId === prev.primary.id ? prev.primary : prev.secondary;
+      if (!targetPane) return prev;
+
+      // Remove from source
+      let next = removeTabFromPane(prev, sourcePaneId, tabId);
+      // Insert into target
+      next = addTabToPane(next, targetPaneId, tabId, index);
+      // Auto-collapse empty source pane
+      next = collapseEmptyPanes(next);
+      return next;
+    });
   }, []);
 
   // Conflict resolution: keep local changes (acknowledge the disk change)
@@ -369,7 +532,17 @@ export function TabProvider({ children }: TabProviderProps) {
 
     setOpenTabs(tabs);
     const active = tabs.find(t => t.path === session.activeFilePath) ?? tabs[tabs.length - 1];
-    setActiveTabId(active.id);
+    // Legacy session restore: synthesize a single primary pane containing all
+    // restored tabs. B5 will extend this to read persisted pane layout.
+    setPaneState({
+      primary: {
+        id: PRIMARY_PANE_ID,
+        tabIds: tabs.map(t => t.id),
+        activeTabId: active.id,
+      },
+      secondary: null,
+      activePaneId: PRIMARY_PANE_ID,
+    });
 
     if (session.expandedFolders?.length) {
       fileSystem.restoreExpandedFolders(session.expandedFolders);
@@ -418,7 +591,8 @@ export function TabProvider({ children }: TabProviderProps) {
   const openFile = useCallback(async (filePath: string, fileName: string) => {
     const existing = openTabs.find(t => t.path === filePath);
     if (existing) {
-      setActiveTabId(existing.id);
+      // Switch to the existing tab in whichever pane currently owns it.
+      switchTab(existing.id);
       return;
     }
 
@@ -448,7 +622,7 @@ export function TabProvider({ children }: TabProviderProps) {
         frontmatterCollapsed: true,
       };
       setOpenTabs(prev => [...prev, newTab]);
-      setActiveTabId(newTab.id);
+      setPaneState(prev => addTabToPane(prev, prev.activePaneId, newTab.id));
       return;
     }
 
@@ -494,13 +668,13 @@ export function TabProvider({ children }: TabProviderProps) {
       };
 
       setOpenTabs(prev => [...prev, newTab]);
-      setActiveTabId(newTab.id);
+      setPaneState(prev => addTabToPane(prev, prev.activePaneId, newTab.id));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('Failed to open file:', err);
       showToast('Failed to open file: ' + message, 'error');
     }
-  }, [openTabs, showToast, extractFrontmatter]);
+  }, [openTabs, showToast, extractFrontmatter, switchTab]);
 
   type SyntheticTabType = 'agent' | 'agent-editor' | 'repo-editor';
 
@@ -508,7 +682,7 @@ export function TabProvider({ children }: TabProviderProps) {
     const path = `${tabType}://${entityId}`;
     const existing = openTabs.find(t => t.path === path);
     if (existing) {
-      setActiveTabId(existing.id);
+      switchTab(existing.id);
       return;
     }
     if (openTabs.length >= MAX_TABS) {
@@ -533,8 +707,8 @@ export function TabProvider({ children }: TabProviderProps) {
       frontmatterCollapsed: true,
     };
     setOpenTabs(prev => [...prev, newTab]);
-    setActiveTabId(newTab.id);
-  }, [openTabs, showToast]);
+    setPaneState(prev => addTabToPane(prev, prev.activePaneId, newTab.id));
+  }, [openTabs, showToast, switchTab]);
 
   const openAgentTab = useCallback((agentId: string, agentName: string) => {
     openSyntheticTab('agent', agentId, agentName);
@@ -586,25 +760,67 @@ export function TabProvider({ children }: TabProviderProps) {
       }
     }
 
-    setOpenTabs(prev => {
-      const filtered = prev.filter(t => t.id !== tabId);
-      if (activeTabId === tabId && filtered.length > 0) {
-        const idx = prev.findIndex(t => t.id === tabId);
-        const newIdx = Math.min(idx, filtered.length - 1);
-        setActiveTabId(filtered[newIdx].id);
-      } else if (filtered.length === 0) {
-        setActiveTabId(null);
-      }
-      return filtered;
+    setOpenTabs(prev => prev.filter(t => t.id !== tabId));
+    setPaneState(prev => {
+      // Remove the tab from whichever pane owns it; collapse-or-promote if that
+      // empties the pane.
+      const inPrimary = prev.primary.tabIds.includes(tabId);
+      const owningPaneId = inPrimary ? prev.primary.id : prev.secondary?.tabIds.includes(tabId) ? prev.secondary.id : null;
+      if (!owningPaneId) return prev;
+      const next = removeTabFromPane(prev, owningPaneId, tabId);
+      return collapseEmptyPanes(next);
     });
-  }, [openTabs, activeTabId]);
+  }, [openTabs]);
 
   const closeOtherTabs = useCallback((tabId: string) => {
+    // Close-others is global (across both panes) and keeps dirty tabs.
+    // After filtering, rebuild pane membership from what survived.
     setOpenTabs(prev => prev.filter(t => t.id === tabId || t.isDirty));
-    setActiveTabId(tabId);
-  }, []);
+    setPaneState(prev => {
+      // Filter each pane's tabIds to the surviving set; the active pane is
+      // the one that contains tabId (so the user lands on the explicit target).
+      const survivingIds = new Set<string>([tabId]);
+      // Add any dirty tabs back
+      for (const t of openTabs) if (t.isDirty) survivingIds.add(t.id);
+      const filterPane = (p: Pane): Pane => ({
+        ...p,
+        tabIds: p.tabIds.filter(id => survivingIds.has(id)),
+        activeTabId: p.tabIds.includes(tabId) ? tabId : (p.activeTabId && survivingIds.has(p.activeTabId) ? p.activeTabId : null),
+      });
+      const nextPrimary = filterPane(prev.primary);
+      const nextSecondary = prev.secondary ? filterPane(prev.secondary) : null;
+      const targetPaneId = nextPrimary.tabIds.includes(tabId) ? nextPrimary.id : (nextSecondary?.tabIds.includes(tabId) ? nextSecondary.id : nextPrimary.id);
+      const next: PaneState = {
+        primary: nextPrimary,
+        secondary: nextSecondary,
+        activePaneId: targetPaneId,
+      };
+      return collapseEmptyPanes(next);
+    });
+  }, [openTabs]);
 
   const reorderTabs = useCallback((activeId: string, overId: string) => {
+    // Reordering is constrained to within a single pane. If the two ids are
+    // in different panes, this is a no-op (cross-pane moves go through
+    // moveTabToPane).
+    setPaneState(prev => {
+      const inPrimary = prev.primary.tabIds.includes(activeId) && prev.primary.tabIds.includes(overId);
+      const inSecondary = !!prev.secondary && prev.secondary.tabIds.includes(activeId) && prev.secondary.tabIds.includes(overId);
+      if (!inPrimary && !inSecondary) return prev;
+      const target = inPrimary ? prev.primary : prev.secondary!;
+      const oldIndex = target.tabIds.indexOf(activeId);
+      const newIndex = target.tabIds.indexOf(overId);
+      if (oldIndex === newIndex) return prev;
+      const tabIds = [...target.tabIds];
+      const [moved] = tabIds.splice(oldIndex, 1);
+      tabIds.splice(newIndex, 0, moved);
+      const nextPane: Pane = { ...target, tabIds };
+      return inPrimary
+        ? { ...prev, primary: nextPane }
+        : { ...prev, secondary: nextPane };
+    });
+    // Also reorder the flat openTabs array so any consumer iterating it
+    // sees the user's intended order.
     setOpenTabs(prev => {
       const oldIndex = prev.findIndex(t => t.id === activeId);
       const newIndex = prev.findIndex(t => t.id === overId);
@@ -776,9 +992,13 @@ export function TabProvider({ children }: TabProviderProps) {
     }
 
     if (prevPath !== workspacePath) {
-      // Workspace switched — reset tabs, then restore session
+      // Workspace switched — reset tabs and panes, then restore session
       setOpenTabs([]);
-      setActiveTabId(null);
+      setPaneState({
+        primary: { id: PRIMARY_PANE_ID, tabIds: [], activeTabId: null },
+        secondary: null,
+        activePaneId: PRIMARY_PANE_ID,
+      });
       restoreSession(workspacePath).catch(() => {});
     }
   }, [workspacePath]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -912,6 +1132,15 @@ export function TabProvider({ children }: TabProviderProps) {
     setTabDirty,
     snapshotTab,
     reloadTabFromDisk,
+    // Pane state and operations
+    primary,
+    secondary,
+    activePaneId,
+    panesAsArray,
+    getTabPaneId,
+    splitToRight,
+    moveTabToPane,
+    setActivePaneId,
     // Conflict resolution
     resolveConflictReload,
     resolveConflictKeep,

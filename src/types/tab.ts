@@ -49,3 +49,17 @@ export interface ActiveFile {
   content: string | JSONContent | null;
   isQuipu: boolean;
 }
+
+/**
+ * A pane is a UI grouping of tabs that renders its own tab bar and viewer.
+ *
+ * Quipu currently supports at most two horizontal panes: a `primary` (always
+ * present) and an optional `secondary` to its right. `Pane.tabIds` is the
+ * authoritative membership for each pane; `openTabs` (in TabContext) remains
+ * a flat list, indexed by tab id.
+ */
+export interface Pane {
+  id: string;
+  tabIds: string[];
+  activeTabId: string | null;
+}
