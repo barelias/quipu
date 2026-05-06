@@ -387,7 +387,7 @@ export default function ChatView({ tab }: ChatViewProps) {
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-bg-base text-text-primary">
+    <div className="flex flex-col flex-1 min-h-0 bg-page-bg text-text-primary">
       <div className="flex items-center justify-between h-12 px-4 border-b border-border shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-7 h-7 rounded bg-accent-muted flex items-center justify-center shrink-0">
@@ -792,13 +792,13 @@ function EditDiff({ input }: { input: Record<string, unknown> }) {
     <div className="flex flex-col gap-2">
       {patches.map((p, i) => (
         <div key={i} className="grid grid-cols-2 gap-1 rounded border border-border overflow-hidden">
-          <div className="bg-error/10 text-[11px] font-mono p-2 whitespace-pre-wrap break-words max-h-64 overflow-auto">
+          <div className="bg-error/10 text-[11px] font-mono p-2 whitespace-pre-wrap break-words max-h-64 overflow-auto text-text-primary dark:text-text-primary">
             <div className="text-[9px] font-semibold uppercase tracking-wider text-error mb-1">− Before</div>
-            <div className="text-text-primary">{p.old || <span className="text-text-tertiary italic">(empty)</span>}</div>
+            <div>{p.old || <span className="text-text-tertiary italic">(empty)</span>}</div>
           </div>
-          <div className="bg-success/10 text-[11px] font-mono p-2 whitespace-pre-wrap break-words max-h-64 overflow-auto">
+          <div className="bg-success/10 text-[11px] font-mono p-2 whitespace-pre-wrap break-words max-h-64 overflow-auto text-text-primary dark:text-text-primary">
             <div className="text-[9px] font-semibold uppercase tracking-wider text-success mb-1">+ After</div>
-            <div className="text-text-primary">{p.new || <span className="text-text-tertiary italic">(empty)</span>}</div>
+            <div>{p.new || <span className="text-text-tertiary italic">(empty)</span>}</div>
           </div>
         </div>
       ))}
@@ -1017,17 +1017,16 @@ export function PermissionRequestItem({
   return (
     <li className={`${isFirst ? '' : 'mt-6'}`}>
       {/*
-        Permission card — parchment palette inspired by the project's
-        knowledge-base-as-paper framing. Cream background, sage olive
-        accents for the header, and pill-shaped action buttons. Works
-        in both light and dark mode via parallel arbitrary-value
-        utilities (no theme tokens for these colors yet — they're
-        deliberately scoped to this surface).
+        Permission card — parchment palette in light/tinted (cream + sage
+        olive) for the project's knowledge-base-as-paper framing; in dark
+        mode we drop the olive in favor of neutral theme tokens (bg-elevated
+        + border) so the card recedes into the gray theme instead of glowing
+        cream against the dark background.
       */}
-      <div className="rounded-2xl border border-[#C8C7A8] dark:border-[#5C5A3F] bg-[#F5EFE3] dark:bg-[#26241A] px-5 py-4 shadow-[0_1px_2px_rgba(60,55,30,0.06),0_4px_12px_rgba(60,55,30,0.04)]">
+      <div className="rounded-2xl border border-[#C8C7A8] bg-[#F5EFE3] dark:border-border dark:bg-bg-elevated px-5 py-4 shadow-[0_1px_2px_rgba(60,55,30,0.06),0_4px_12px_rgba(60,55,30,0.04)]">
         <div className="flex items-center gap-2 mb-3">
-          <HeaderIcon size={14} className="text-[#7A8A4A] dark:text-[#9CA876] shrink-0" weight="fill" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7A8A4A] dark:text-[#9CA876]">
+          <HeaderIcon size={14} className="text-[#7A8A4A] dark:text-success shrink-0" weight="fill" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7A8A4A] dark:text-success">
             {headerLabel}
           </span>
           {statusLabel && (
@@ -1052,16 +1051,16 @@ export function PermissionRequestItem({
           )
           : (
             <>
-              <div className="text-[13px] break-words mb-2 text-[#3D3A28] dark:text-[#E8DFC0]">
+              <div className="text-[13px] break-words mb-2 text-[#3D3A28] dark:text-text-primary">
                 <span className="font-semibold">{req.action}</span>
                 {req.path && (
                   <FilePathLink
                     display={req.path}
                     absolutePath={resolveAgentFilePath(openableFilePath(req.input) ?? '', agent, workspacePath, repos)}
-                    className="ml-2 font-mono text-[#7A6F4A] dark:text-[#B8AC78]"
+                    className="ml-2 font-mono text-[#7A6F4A] dark:text-text-secondary"
                   />
                 )}
-                {req.detail && <span className="ml-2 font-mono text-[#7A6F4A] dark:text-[#B8AC78]">{req.detail}</span>}
+                {req.detail && <span className="ml-2 font-mono text-[#7A6F4A] dark:text-text-secondary">{req.detail}</span>}
               </div>
               <ToolDetail action={req.action} input={req.input} />
             </>
@@ -1074,7 +1073,7 @@ export function PermissionRequestItem({
               className={cn(
                 'flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-full transition-all shadow-sm',
                 'bg-[#8FA15A] text-white hover:bg-[#7A8A4A]',
-                'dark:bg-[#9CA876] dark:text-[#1F1D14] dark:hover:bg-[#B0BB8A]',
+                'dark:bg-success/20 dark:text-success dark:hover:bg-success/30',
               )}
               onClick={() => onRespondPermission('allow')}
             >
@@ -1085,10 +1084,11 @@ export function PermissionRequestItem({
               type="button"
               className={cn(
                 'flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-full transition-all',
-                'bg-white/60 dark:bg-[#3A3622]/60 border border-[#C8C7A8] dark:border-[#5C5A3F]',
-                'text-[#6B6243] dark:text-[#B8AC78]',
+                'bg-white/60 border border-[#C8C7A8]',
+                'dark:bg-bg-overlay dark:border-border',
+                'text-[#6B6243] dark:text-text-secondary',
                 'hover:bg-[#F0E9D6] hover:border-[#A8957A] hover:text-[#8B5A3C]',
-                'dark:hover:bg-[#42402B] dark:hover:border-[#7A6F4A]',
+                'dark:hover:bg-bg-base dark:hover:text-text-primary',
               )}
               onClick={() => onRespondPermission('deny')}
             >
