@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { IconContext } from '@phosphor-icons/react';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
 import type { Editor } from '@tiptap/react';
 import Terminal from './components/ui/Terminal';
 import { Dialog } from 'radix-ui';
@@ -92,7 +99,7 @@ function AppContent() {
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
     resolveConflictReload, resolveConflictKeep, resolveConflictDismiss,
     reloadTabFromDisk,
-    primary, secondary, activePaneId,
+    primary, secondary, activePaneId, reorderTabs, moveTabToPane,
   } = useTab();
   // Helpers that read from the active pane's per-pane ref bag.
   const getActivePaneToggleFind = () => paneRefsRef.current[activePaneId]?.toggleFindRef.current ?? null;
@@ -105,6 +112,30 @@ function AppContent() {
   useEffect(() => {
     setEditorInstance(editorInstancesRef.current[activePaneId] ?? null);
   }, [activePaneId]);
+
+  // Tab drag-and-drop: the DndContext lives at App level so a tab can be dragged
+  // from one pane's bar to another. Each pane's TabBar renders a SortableContext
+  // scoped to its own tabs; useSortable items carry { paneId } in `data` so this
+  // handler can tell same-pane reorder from cross-pane move.
+  const tabDragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+  const handleTabDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+    if (active.id === over.id) return;
+    const sourcePaneId = (active.data.current as { paneId?: string } | undefined)?.paneId;
+    const targetPaneId = (over.data.current as { paneId?: string } | undefined)?.paneId;
+    if (!sourcePaneId || !targetPaneId) return;
+    if (sourcePaneId === targetPaneId) {
+      reorderTabs(String(active.id), String(over.id));
+    } else {
+      // Cross-pane move: drop position is the index of `over` within the target pane.
+      const targetPane = targetPaneId === primary.id ? primary : secondary;
+      const index = targetPane?.tabIds.indexOf(String(over.id)) ?? undefined;
+      moveTabToPane(String(active.id), targetPaneId, index);
+    }
+  }, [primary, secondary, reorderTabs, moveTabToPane]);
   const {
     terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
     sendToTerminal, clearTerminal, getTerminalSelection, hasTerminalSelection,
@@ -928,29 +959,31 @@ function AppContent() {
                   />
                 </div>
               ) : (
-                <Group orientation="horizontal" style={{ height: '100%' }}>
-                  <Panel minSize={20}>
-                    <PaneView
-                      pane={primary}
-                      onEditorReady={handlePaneEditorReady}
-                      registerPaneRefs={registerPaneRefs}
-                      onRawModeChange={setEditorRawMode}
-                    />
-                  </Panel>
-                  {secondary !== null && (
-                    <>
-                      <Separator className="shrink-0 w-px cursor-col-resize bg-border" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />
-                      <Panel minSize={20}>
-                        <PaneView
-                          pane={secondary}
-                          onEditorReady={handlePaneEditorReady}
-                          registerPaneRefs={registerPaneRefs}
-                          onRawModeChange={setEditorRawMode}
-                        />
-                      </Panel>
-                    </>
-                  )}
-                </Group>
+                <DndContext sensors={tabDragSensors} onDragEnd={handleTabDragEnd}>
+                  <Group orientation="horizontal" style={{ height: '100%' }}>
+                    <Panel minSize={20}>
+                      <PaneView
+                        pane={primary}
+                        onEditorReady={handlePaneEditorReady}
+                        registerPaneRefs={registerPaneRefs}
+                        onRawModeChange={setEditorRawMode}
+                      />
+                    </Panel>
+                    {secondary !== null && (
+                      <>
+                        <Separator className="shrink-0 w-px cursor-col-resize bg-border" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />
+                        <Panel minSize={20}>
+                          <PaneView
+                            pane={secondary}
+                            onEditorReady={handlePaneEditorReady}
+                            registerPaneRefs={registerPaneRefs}
+                            onRawModeChange={setEditorRawMode}
+                          />
+                        </Panel>
+                      </>
+                    )}
+                  </Group>
+                </DndContext>
               )}
             </Panel>
             <Separator className="shrink-0 h-px cursor-row-resize bg-border transition-colors hover:bg-accent/50 active:bg-accent" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />

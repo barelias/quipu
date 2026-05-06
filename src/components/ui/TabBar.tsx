@@ -1,12 +1,5 @@
 import React, { useCallback, useRef } from 'react';
 import {
-  DndContext,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
   SortableContext,
   horizontalListSortingStrategy,
   useSortable,
@@ -28,14 +21,19 @@ function tabTypeIcon(type: string | undefined): { Icon: PhosphorIcon; className:
 
 interface SortableTabProps {
   tab: Tab;
+  paneId: string;
   isActive: boolean;
   onSwitch: (id: string) => void;
   onClose: (e: React.MouseEvent<HTMLButtonElement>, id: string) => void;
 }
 
-function SortableTab({ tab, isActive, onSwitch, onClose }: SortableTabProps) {
+function SortableTab({ tab, paneId, isActive, onSwitch, onClose }: SortableTabProps) {
+  // `data.paneId` lets the App-level onDragEnd determine which pane a tab
+  // was dragged from / dropped on. Same-pane drag → reorderTabs; different
+  // pane → moveTabToPane.
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
+    data: { paneId },
   });
 
   return (
@@ -122,7 +120,7 @@ interface TabBarProps {
 }
 
 export default function TabBar({ pane }: TabBarProps = {}) {
-  const { openTabs, activeTabId, primary, switchTab, closeTab, reorderTabs } = useTab();
+  const { openTabs, activeTabId, primary, switchTab, closeTab } = useTab();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // When a pane is supplied, scope the bar to that pane's tab order; otherwise
@@ -136,21 +134,10 @@ export default function TabBar({ pane }: TabBarProps = {}) {
     ? effectivePane.activeTabId === tabId
     : tabId === activeTabId;
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-  );
-
   const handleClose = useCallback((e: React.MouseEvent<HTMLButtonElement>, tabId: string) => {
     e.stopPropagation();
     closeTab(tabId);
   }, [closeTab]);
-
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      reorderTabs(String(active.id), String(over.id));
-    }
-  }, [reorderTabs]);
 
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     if (scrollRef.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
@@ -160,6 +147,8 @@ export default function TabBar({ pane }: TabBarProps = {}) {
 
   if (visibleTabs.length === 0) return null;
 
+  // The DndContext lives in App.tsx so drags can cross pane bars (B3).
+  // This component only renders a SortableContext scoped to its pane.
   return (
     <div
       ref={scrollRef}
@@ -169,19 +158,18 @@ export default function TabBar({ pane }: TabBarProps = {}) {
       role="tablist"
       data-pane-id={effectivePane.id}
     >
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <SortableContext items={visibleTabs.map(t => t.id)} strategy={horizontalListSortingStrategy}>
-          {visibleTabs.map((tab: Tab) => (
-            <SortableTab
-              key={tab.id}
-              tab={tab}
-              isActive={isActiveTab(tab.id)}
-              onSwitch={switchTab}
-              onClose={handleClose}
-            />
-          ))}
-        </SortableContext>
-      </DndContext>
+      <SortableContext items={visibleTabs.map(t => t.id)} strategy={horizontalListSortingStrategy}>
+        {visibleTabs.map((tab: Tab) => (
+          <SortableTab
+            key={tab.id}
+            tab={tab}
+            paneId={effectivePane.id}
+            isActive={isActiveTab(tab.id)}
+            onSwitch={switchTab}
+            onClose={handleClose}
+          />
+        ))}
+      </SortableContext>
     </div>
   );
 }
