@@ -3,6 +3,7 @@ import type { Editor as TiptapEditor } from '@tiptap/react';
 import Editor_ from '../editor/Editor';
 import TabBar from './TabBar';
 import FileConflictBar from './FileConflictBar';
+import RightEdgeDropZone from './RightEdgeDropZone';
 import { useTab } from '../../context/TabContext';
 import { useFileSystem } from '../../context/FileSystemContext';
 import { resolveViewer } from '../../extensions/registry';
@@ -40,6 +41,14 @@ interface PaneViewProps {
    * active pane in normal interaction.
    */
   onRawModeChange?: (raw: boolean) => void;
+  /**
+   * When true, the pane renders a `RightEdgeDropZone` on its right edge
+   * (only visible while a drag is in progress). App passes true only for
+   * the primary pane in single-pane mode; the zone triggers `splitToRight`.
+   */
+  showSplitDropZone?: boolean;
+  /** Whether a tab drag is currently in progress (drives drop-zone visibility). */
+  isDragActive?: boolean;
 }
 
 /**
@@ -49,7 +58,14 @@ interface PaneViewProps {
  * On mouse-down anywhere within the pane container, sets `activePaneId` to this
  * pane so global keyboard commands route here.
  */
-export default function PaneView({ pane, onEditorReady, registerPaneRefs, onRawModeChange }: PaneViewProps) {
+export default function PaneView({
+  pane,
+  onEditorReady,
+  registerPaneRefs,
+  onRawModeChange,
+  showSplitDropZone = false,
+  isDragActive = false,
+}: PaneViewProps) {
   const {
     openTabs,
     snapshotTab,
@@ -188,6 +204,7 @@ export default function PaneView({ pane, onEditorReady, registerPaneRefs, onRawM
           <div className="text-sm text-text-primary opacity-35 italic">Use the Explorer or press Ctrl+P</div>
         </div>
       )}
+      {showSplitDropZone && <RightEdgeDropZone isDragActive={isDragActive} />}
     </div>
   );
 }

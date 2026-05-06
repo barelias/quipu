@@ -99,7 +99,7 @@ function AppContent() {
     addFrontmatterTag, removeFrontmatterTag, updateFrontmatterTag,
     resolveConflictReload, resolveConflictKeep, resolveConflictDismiss,
     reloadTabFromDisk,
-    primary, secondary, activePaneId, reorderTabs, moveTabToPane,
+    primary, secondary, activePaneId, reorderTabs, moveTabToPane, splitToRight,
   } = useTab();
   // Helpers that read from the active pane's per-pane ref bag.
   const getActivePaneToggleFind = () => paneRefsRef.current[activePaneId]?.toggleFindRef.current ?? null;
@@ -116,13 +116,24 @@ function AppContent() {
   // Tab drag-and-drop: the DndContext lives at App level so a tab can be dragged
   // from one pane's bar to another. Each pane's TabBar renders a SortableContext
   // scoped to its own tabs; useSortable items carry { paneId } in `data` so this
-  // handler can tell same-pane reorder from cross-pane move.
+  // handler can tell same-pane reorder from cross-pane move. The right-edge
+  // drop zone (id 'pane:right-edge') triggers splitToRight when single-pane.
   const tabDragSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
+  const [isTabDragActive, setIsTabDragActive] = useState(false);
+  const handleTabDragStart = useCallback(() => { setIsTabDragActive(true); }, []);
+  const handleTabDragCancel = useCallback(() => { setIsTabDragActive(false); }, []);
   const handleTabDragEnd = useCallback((event: DragEndEvent) => {
+    setIsTabDragActive(false);
     const { active, over } = event;
     if (!over) return;
+    // Drop on the right-edge zone → split (no-op when secondary already exists,
+    // or when source pane has < 2 tabs; both guards live in splitToRight).
+    if (over.id === 'pane:right-edge') {
+      splitToRight(String(active.id));
+      return;
+    }
     if (active.id === over.id) return;
     const sourcePaneId = (active.data.current as { paneId?: string } | undefined)?.paneId;
     const targetPaneId = (over.data.current as { paneId?: string } | undefined)?.paneId;
@@ -135,7 +146,7 @@ function AppContent() {
       const index = targetPane?.tabIds.indexOf(String(over.id)) ?? undefined;
       moveTabToPane(String(active.id), targetPaneId, index);
     }
-  }, [primary, secondary, reorderTabs, moveTabToPane]);
+  }, [primary, secondary, reorderTabs, moveTabToPane, splitToRight]);
   const {
     terminalTabs, activeTerminalId, createTerminalTab, setTerminalClaudeRunning,
     sendToTerminal, clearTerminal, getTerminalSelection, hasTerminalSelection,
@@ -959,7 +970,12 @@ function AppContent() {
                   />
                 </div>
               ) : (
-                <DndContext sensors={tabDragSensors} onDragEnd={handleTabDragEnd}>
+                <DndContext
+                  sensors={tabDragSensors}
+                  onDragStart={handleTabDragStart}
+                  onDragEnd={handleTabDragEnd}
+                  onDragCancel={handleTabDragCancel}
+                >
                   <Group orientation="horizontal" style={{ height: '100%' }}>
                     <Panel minSize={20}>
                       <PaneView
@@ -967,6 +983,8 @@ function AppContent() {
                         onEditorReady={handlePaneEditorReady}
                         registerPaneRefs={registerPaneRefs}
                         onRawModeChange={setEditorRawMode}
+                        showSplitDropZone={secondary === null}
+                        isDragActive={isTabDragActive}
                       />
                     </Panel>
                     {secondary !== null && (
