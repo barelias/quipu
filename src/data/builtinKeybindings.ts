@@ -22,4 +22,5 @@ export const builtinKeybindings: KeybindingEntry[] = [
   { key: 'ctrl+shift+l',     mac: 'cmd+shift+l',     commandId: 'terminal.claude' },
   { key: 'ctrl+shift+r',     mac: 'cmd+shift+r',     commandId: 'file.reloadFromDisk' },
   { key: 'ctrl+f',           mac: 'cmd+f',           commandId: 'editor.find' },
+  { key: 'ctrl+\\',          mac: 'cmd+\\',          commandId: 'view.splitRight' },
 ];

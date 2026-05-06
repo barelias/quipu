@@ -227,6 +227,7 @@ function AppContent() {
     registerCommand('terminal.claude',     () => appActionsRef.current.sendToClaude(),       { label: 'Send to Claude',   category: 'Terminal' });
     registerCommand('file.reloadFromDisk', () => appActionsRef.current.reloadFromDisk(),    { label: 'Reload from Disk', category: 'File' });
     registerCommand('editor.find',         () => appActionsRef.current.find(),               { label: 'Find',             category: 'Editor' });
+    registerCommand('view.splitRight',     () => appActionsRef.current.splitRight(),         { label: 'Split editor right', category: 'View' });
 
     // --- Built-in keybindings (registered before plugins so they always win conflicts) ---
     builtinKeybindings.forEach(registerKeybinding);
@@ -416,6 +417,7 @@ function AppContent() {
     sendToClaude: () => Promise<void>;
     reloadFromDisk: () => void;
     find: () => void;
+    splitRight: () => void;
   }>(null!);
   appActionsRef.current = {
     save: () => {
@@ -453,6 +455,11 @@ function AppContent() {
     sendToClaude: handleSendToClaude,
     reloadFromDisk: () => { if (activeTabId) reloadTabFromDisk(activeTabId); },
     find: () => { getActivePaneToggleFind()?.(); },
+    splitRight: () => {
+      // Split the active pane's active tab off into a new secondary pane.
+      // splitToRight no-ops when already split or when the source pane has < 2 tabs.
+      if (activeTabId) splitToRight(activeTabId);
+    },
   };
 
   // Keyboard shortcuts — all shortcuts are driven by the keybinding registry.
@@ -662,6 +669,17 @@ function AppContent() {
             },
             danger: true,
           });
+          // Split-right is offered only when the editor area is single-pane
+          // and the source pane has at least 2 tabs (otherwise splitToRight
+          // is a no-op — surfacing it in the menu would be confusing).
+          if (secondary === null && primary.tabIds.length >= 2 && primary.tabIds.includes(tabId)) {
+            items.push({ separator: true });
+            items.push({
+              label: 'Split editor right',
+              shortcut: 'Ctrl+\\',
+              onClick: () => splitToRight(tabId),
+            });
+          }
         }
       }
 
