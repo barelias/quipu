@@ -3,10 +3,13 @@ import { IconContext } from '@phosphor-icons/react';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
+  pointerWithin,
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core';
 import type { Editor } from '@tiptap/react';
 import Terminal from './components/ui/Terminal';
@@ -122,10 +125,23 @@ function AppContent() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
   const [isTabDragActive, setIsTabDragActive] = useState(false);
-  const handleTabDragStart = useCallback(() => { setIsTabDragActive(true); }, []);
-  const handleTabDragCancel = useCallback(() => { setIsTabDragActive(false); }, []);
+  // Track which tab is currently being dragged so we can render its preview
+  // inside <DragOverlay> (a portal that escapes the tab bar's overflow).
+  // Without the overlay, the dragged tab's transform stays clipped inside
+  // the tab bar and the user gets no visual feedback when the cursor moves
+  // down into the editor area / over the right-edge drop zone.
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  const handleTabDragStart = useCallback((event: DragStartEvent) => {
+    setIsTabDragActive(true);
+    setDraggedTabId(String(event.active.id));
+  }, []);
+  const handleTabDragCancel = useCallback(() => {
+    setIsTabDragActive(false);
+    setDraggedTabId(null);
+  }, []);
   const handleTabDragEnd = useCallback((event: DragEndEvent) => {
     setIsTabDragActive(false);
+    setDraggedTabId(null);
     const { active, over } = event;
     if (!over) return;
     // Drop on the right-edge zone → split (no-op when secondary already exists,
@@ -1015,6 +1031,7 @@ function AppContent() {
               ) : (
                 <DndContext
                   sensors={tabDragSensors}
+                  collisionDetection={pointerWithin}
                   onDragStart={handleTabDragStart}
                   onDragEnd={handleTabDragEnd}
                   onDragCancel={handleTabDragCancel}
@@ -1044,6 +1061,30 @@ function AppContent() {
                       </>
                     )}
                   </Group>
+                  {/*
+                    DragOverlay renders the dragged tab visual in a portal at
+                    document.body level so it follows the cursor freely instead
+                    of being clipped by the tab bar's overflow. Without this,
+                    dragging a tab "down" into the editor area shows no
+                    feedback because the original tab's transform stays inside
+                    the bar's overflow box.
+                  */}
+                  <DragOverlay dropAnimation={null}>
+                    {draggedTabId ? (() => {
+                      const t = openTabs.find(tab => tab.id === draggedTabId);
+                      if (!t) return null;
+                      return (
+                        <div
+                          className="flex items-center gap-1.5 h-[35px] px-4 bg-page-bg border border-border rounded shadow-lg text-[13px] text-text-primary opacity-95 cursor-grabbing"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <span className="overflow-hidden text-ellipsis max-w-[180px] font-sans whitespace-nowrap">
+                            {t.name}
+                          </span>
+                        </div>
+                      );
+                    })() : null}
+                  </DragOverlay>
                 </DndContext>
               )}
             </Panel>
