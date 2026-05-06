@@ -31,10 +31,23 @@ interface SessionSnapshotEntry {
   name?: string;
 }
 
+/**
+ * Pane membership persisted by file path. Mirrors the type in WorkspaceContext;
+ * keep the two in sync when extending the snapshot shape.
+ */
+interface SessionPaneSnapshot {
+  id: string;
+  paths: string[];
+  activePath: string | null;
+}
+
 interface SessionSnapshot {
   openFilePaths: Array<SessionSnapshotEntry>;
   activeFilePath: string | null;
   expandedFolders: string[];
+  /** Pane layout (B5). Optional for back-compat with pre-pane sessions. */
+  panes?: SessionPaneSnapshot[];
+  activePaneId?: string;
 }
 
 /**
@@ -532,17 +545,51 @@ export function TabProvider({ children }: TabProviderProps) {
 
     setOpenTabs(tabs);
     const active = tabs.find(t => t.path === session.activeFilePath) ?? tabs[tabs.length - 1];
-    // Legacy session restore: synthesize a single primary pane containing all
-    // restored tabs. B5 will extend this to read persisted pane layout.
-    setPaneState({
-      primary: {
+
+    // Map persisted file paths back to the freshly-generated tab ids.
+    const tabIdByPath = new Map(tabs.map(t => [t.path, t.id]));
+    const pathsToIds = (paths: string[]): string[] =>
+      paths.map(p => tabIdByPath.get(p)).filter((id): id is string => !!id);
+
+    if (session.panes && session.panes.length > 0) {
+      // Modern path: rebuild pane layout from persisted snapshot.
+      const restoredPanes = session.panes.map(p => ({
+        id: p.id,
+        tabIds: pathsToIds(p.paths),
+        activeTabId: (p.activePath && tabIdByPath.get(p.activePath)) || null,
+      })).filter(p => p.tabIds.length > 0);
+
+      const primaryRestored = restoredPanes[0] ?? {
         id: PRIMARY_PANE_ID,
         tabIds: tabs.map(t => t.id),
         activeTabId: active.id,
-      },
-      secondary: null,
-      activePaneId: PRIMARY_PANE_ID,
-    });
+      };
+      const secondaryRestored = restoredPanes[1] ?? null;
+      const restoredActivePaneId = session.activePaneId === secondaryRestored?.id
+        ? secondaryRestored.id
+        : primaryRestored.id;
+
+      setPaneState({
+        primary: { ...primaryRestored, id: PRIMARY_PANE_ID },
+        secondary: secondaryRestored
+          ? { ...secondaryRestored, id: SECONDARY_PANE_ID }
+          : null,
+        activePaneId: restoredActivePaneId === PRIMARY_PANE_ID || !secondaryRestored
+          ? PRIMARY_PANE_ID
+          : SECONDARY_PANE_ID,
+      });
+    } else {
+      // Legacy session (no `panes` field): synthesize a single primary pane.
+      setPaneState({
+        primary: {
+          id: PRIMARY_PANE_ID,
+          tabIds: tabs.map(t => t.id),
+          activeTabId: active.id,
+        },
+        secondary: null,
+        activePaneId: PRIMARY_PANE_ID,
+      });
+    }
 
     if (session.expandedFolders?.length) {
       fileSystem.restoreExpandedFolders(session.expandedFolders);

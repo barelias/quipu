@@ -23,10 +23,23 @@ interface SessionSnapshotEntry {
   name?: string;
 }
 
+/**
+ * Pane membership persisted by path — tab ids are session-scoped (regenerated
+ * on restore) so we identify pane membership by stable file paths instead.
+ */
+interface SessionPaneSnapshot {
+  id: string;
+  paths: string[];
+  activePath: string | null;
+}
+
 interface SessionSnapshot {
   openFilePaths: Array<SessionSnapshotEntry>;
   activeFilePath: string | null;
   expandedFolders: string[];
+  /** Pane layout (B5). Optional for back-compat with pre-pane sessions. */
+  panes?: SessionPaneSnapshot[];
+  activePaneId?: string;
 }
 
 /**
@@ -35,12 +48,20 @@ interface SessionSnapshot {
  * the session snapshot to storageService.
  */
 function SessionPersistence({ children }: { children: React.ReactNode }) {
-  const { openTabs, activeTabId } = useTab();
+  const { openTabs, activeTabId, primary, secondary, activePaneId } = useTab();
   const { expandedFolders, workspacePath } = useFileSystem();
 
   useEffect(() => {
     if (!workspacePath) return;
     const timer = setTimeout(() => {
+      // Map tab ids to file paths for pane persistence (ids are regenerated
+      // on restore; paths are stable).
+      const idToPath = new Map(openTabs.map(t => [t.id, t.path]));
+      const paneToSnap = (p: typeof primary): SessionPaneSnapshot => ({
+        id: p.id,
+        paths: p.tabIds.map(id => idToPath.get(id)).filter((p): p is string => !!p),
+        activePath: (p.activeTabId && idToPath.get(p.activeTabId)) || null,
+      });
       const snapshot: SessionSnapshot = {
         openFilePaths: openTabs
           .filter(t => t.path)
@@ -51,11 +72,15 @@ function SessionPersistence({ children }: { children: React.ReactNode }) {
           })),
         activeFilePath: openTabs.find(t => t.id === activeTabId)?.path ?? null,
         expandedFolders: [...expandedFolders],
+        panes: secondary
+          ? [paneToSnap(primary), paneToSnap(secondary)]
+          : [paneToSnap(primary)],
+        activePaneId,
       };
       storage.set(`session:${workspacePath}`, snapshot).catch(() => {});
     }, 500);
     return () => clearTimeout(timer);
-  }, [openTabs, activeTabId, expandedFolders, workspacePath]);
+  }, [openTabs, activeTabId, expandedFolders, workspacePath, primary, secondary, activePaneId]);
 
   return <>{children}</>;
 }
