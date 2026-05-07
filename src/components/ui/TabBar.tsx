@@ -1,4 +1,5 @@
 import React, { useCallback, useRef } from 'react';
+import { useDroppable } from '@dnd-kit/core';
 import {
   SortableContext,
   horizontalListSortingStrategy,
@@ -9,6 +10,16 @@ import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useTab } from '../../context/TabContext';
 import type { Pane, Tab } from '../../types/tab';
+
+/**
+ * Stable prefix for tab-bar droppable ids. Each pane bar gets one
+ * `pane-bar:<paneId>` droppable so a tab can be dropped on the bar's
+ * empty trailing area to append to that pane (cross-pane move).
+ * Without this, pointerWithin collision detection only matches when
+ * the cursor is inside a sortable tab's rect.
+ */
+export const PANE_BAR_DROPPABLE_PREFIX = 'pane-bar:';
+export const paneBarDroppableId = (paneId: string) => `${PANE_BAR_DROPPABLE_PREFIX}${paneId}`;
 
 function tabTypeIcon(type: string | undefined): { Icon: PhosphorIcon; className: string } | null {
   switch (type) {
@@ -126,6 +137,15 @@ export default function TabBar({ pane }: TabBarProps = {}) {
   // When a pane is supplied, scope the bar to that pane's tab order; otherwise
   // fall back to all openTabs (single-bar legacy mode).
   const effectivePane = pane ?? primary;
+
+  // Make the entire bar a drop target so a tab dragged onto an empty area of
+  // the bar (past the rightmost tab) gets appended to this pane. Without this,
+  // pointerWithin collision detection only matches when the cursor is inside
+  // a specific sortable tab — empty space drops fail silently.
+  const { setNodeRef: setBarDroppableRef } = useDroppable({
+    id: paneBarDroppableId(effectivePane.id),
+    data: { paneId: effectivePane.id, kind: 'pane-bar' },
+  });
   const tabsById = new Map(openTabs.map(t => [t.id, t]));
   const visibleTabs: Tab[] = pane
     ? effectivePane.tabIds.map(id => tabsById.get(id)).filter((t): t is Tab => !!t)
@@ -149,9 +169,16 @@ export default function TabBar({ pane }: TabBarProps = {}) {
 
   // The DndContext lives in App.tsx so drags can cross pane bars (B3).
   // This component only renders a SortableContext scoped to its pane.
+  // The same DOM node is also the pane-bar droppable so empty-area drops
+  // (past the last tab) get routed to this pane.
+  const setRefs = useCallback((el: HTMLDivElement | null) => {
+    scrollRef.current = el;
+    setBarDroppableRef(el);
+  }, [setBarDroppableRef]);
+
   return (
     <div
-      ref={scrollRef}
+      ref={setRefs}
       className="flex h-[35px] bg-bg-surface border-b border-border overflow-x-auto overflow-y-hidden shrink-0 [&::-webkit-scrollbar]:h-[3px] [&::-webkit-scrollbar-thumb]:bg-border"
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       onWheel={handleWheel}

@@ -150,10 +150,22 @@ function AppContent() {
       splitToRight(String(active.id));
       return;
     }
-    if (active.id === over.id) return;
     const sourcePaneId = (active.data.current as { paneId?: string } | undefined)?.paneId;
-    const targetPaneId = (over.data.current as { paneId?: string } | undefined)?.paneId;
+    const overData = over.data.current as { paneId?: string; kind?: string } | undefined;
+    const overKind = overData?.kind;
+    const targetPaneId = overData?.paneId;
     if (!sourcePaneId || !targetPaneId) return;
+
+    // Drop on the empty area of a pane's tab bar (no specific tab targeted).
+    // Append to that pane; if it's the same pane, do nothing.
+    if (overKind === 'pane-bar') {
+      if (sourcePaneId !== targetPaneId) {
+        moveTabToPane(String(active.id), targetPaneId);
+      }
+      return;
+    }
+
+    if (active.id === over.id) return;
     if (sourcePaneId === targetPaneId) {
       reorderTabs(String(active.id), String(over.id));
     } else {
