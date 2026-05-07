@@ -165,16 +165,17 @@ export default function TabBar({ pane }: TabBarProps = {}) {
     }
   }, []);
 
-  if (visibleTabs.length === 0) return null;
-
   // The DndContext lives in App.tsx so drags can cross pane bars (B3).
   // This component only renders a SortableContext scoped to its pane.
   // The same DOM node is also the pane-bar droppable so empty-area drops
-  // (past the last tab) get routed to this pane.
+  // (past the last tab) get routed to this pane. Declared before any early
+  // return so hook order stays stable across re-renders.
   const setRefs = useCallback((el: HTMLDivElement | null) => {
     scrollRef.current = el;
     setBarDroppableRef(el);
   }, [setBarDroppableRef]);
+
+  if (visibleTabs.length === 0) return null;
 
   return (
     <div
