@@ -73,6 +73,11 @@ function convertValue(value: unknown, fromType: ColumnType, toType: ColumnType):
       if (str === 'true' || str === '1') return true;
       if (str === 'false' || str === '0') return false;
       return false;
+    case 'link':
+      // Link cells store the path string; preserve text values, drop
+      // structured data (selects/booleans) into null so the user picks
+      // a path explicitly.
+      return typeof value === 'string' ? value : null;
     default:
       return value;
   }
@@ -248,6 +253,9 @@ export function useDatabase({ content, onContentChange }: UseDatabaseOptions): U
         name: oldCol.name,
         type: newType,
         ...(newType === 'select' || newType === 'multi-select' ? { options: [] } : {}),
+        // Link defaults: workspace-relative paths and a markdown extension
+        // for create-new actions. Users tune these via the Add Column dialog.
+        ...(newType === 'link' ? { mode: 'global' as const, defaultExtension: '.md' } : {}),
       } as ColumnDef;
 
       const next = {

@@ -4,7 +4,7 @@ import { PlusIcon, XIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { ColumnDef, ColumnType, SelectOption } from '../types';
+import type { ColumnDef, ColumnType, LinkMode, SelectOption } from '../types';
 import { SELECT_COLORS } from '../types';
 
 interface AddColumnDialogProps {
@@ -21,7 +21,15 @@ const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'multi-select', label: 'Multi-select' },
   { value: 'date', label: 'Date' },
   { value: 'checkbox', label: 'Checkbox' },
+  { value: 'link', label: 'Link (file)' },
 ];
+
+/** Strip leading dot then re-prefix; '' stays empty for "no extension". */
+function normalizeExtension(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+  return trimmed.startsWith('.') ? trimmed : `.${trimmed}`;
+}
 
 function toColumnId(name: string, existingIds: string[]): string {
   let id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -40,8 +48,11 @@ export function AddColumnDialog({ isOpen, onClose, onAdd, existingIds }: AddColu
   const [type, setType] = useState<ColumnType>('text');
   const [options, setOptions] = useState<SelectOption[]>([]);
   const [newOptionValue, setNewOptionValue] = useState('');
+  const [linkMode, setLinkMode] = useState<LinkMode>('global');
+  const [defaultExtension, setDefaultExtension] = useState('.md');
 
   const isSelectType = type === 'select' || type === 'multi-select';
+  const isLinkType = type === 'link';
 
   const handleAdd = useCallback(() => {
     if (!name.trim()) return;
@@ -51,13 +62,16 @@ export function AddColumnDialog({ isOpen, onClose, onAdd, existingIds }: AddColu
       name: name.trim(),
       type,
       ...(isSelectType ? { options } : {}),
+      ...(isLinkType ? { mode: linkMode, defaultExtension: normalizeExtension(defaultExtension) } : {}),
     } as ColumnDef;
     onAdd(colDef);
     setName('');
     setType('text');
     setOptions([]);
+    setLinkMode('global');
+    setDefaultExtension('.md');
     onClose();
-  }, [name, type, options, isSelectType, existingIds, onAdd, onClose]);
+  }, [name, type, options, isSelectType, isLinkType, linkMode, defaultExtension, existingIds, onAdd, onClose]);
 
   const handleAddOption = useCallback(() => {
     if (!newOptionValue.trim()) return;
@@ -124,6 +138,52 @@ export function AddColumnDialog({ isOpen, onClose, onAdd, existingIds }: AddColu
                 </RadixSelect.Portal>
               </RadixSelect.Root>
             </div>
+
+            {isLinkType && (
+              <>
+                <div>
+                  <label className="text-xs text-text-secondary mb-1 block">Link mode</label>
+                  <div className="flex gap-2">
+                    <label className="flex items-center gap-2 flex-1 px-3 py-2 text-sm bg-bg-surface border border-border rounded-md cursor-pointer hover:bg-bg-elevated">
+                      <input
+                        type="radio"
+                        name="link-mode"
+                        checked={linkMode === 'global'}
+                        onChange={() => setLinkMode('global')}
+                      />
+                      <span>
+                        <span className="block text-text-primary">Global</span>
+                        <span className="block text-xs text-text-tertiary">Paths are workspace-relative.</span>
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 flex-1 px-3 py-2 text-sm bg-bg-surface border border-border rounded-md cursor-pointer hover:bg-bg-elevated">
+                      <input
+                        type="radio"
+                        name="link-mode"
+                        checked={linkMode === 'relative'}
+                        onChange={() => setLinkMode('relative')}
+                      />
+                      <span>
+                        <span className="block text-text-primary">Relative</span>
+                        <span className="block text-xs text-text-tertiary">Files live in a sibling folder.</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-text-secondary mb-1 block">Default extension</label>
+                  <Input
+                    value={defaultExtension}
+                    onChange={e => setDefaultExtension(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder=".md"
+                  />
+                  <span className="text-xs text-text-tertiary mt-1 block">
+                    Used when creating new files from this column. Leave empty for none.
+                  </span>
+                </div>
+              </>
+            )}
 
             {isSelectType && (
               <div>

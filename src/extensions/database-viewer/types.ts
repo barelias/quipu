@@ -1,6 +1,15 @@
 // Column type definitions
 
-export type ColumnType = 'text' | 'number' | 'select' | 'multi-select' | 'date' | 'checkbox';
+export type ColumnType = 'text' | 'number' | 'select' | 'multi-select' | 'date' | 'checkbox' | 'link';
+
+/**
+ * Link column mode.
+ * - `global`: cell value is a path relative to the workspace root.
+ * - `relative`: cell value is a basename inside a sibling folder named
+ *    after the database file. The folder is auto-created on first use and
+ *    moved/renamed/deleted in lockstep with the database file.
+ */
+export type LinkMode = 'global' | 'relative';
 
 export interface BaseColumnDef {
   id: string;
@@ -33,6 +42,18 @@ export interface CheckboxColumnDef extends BaseColumnDef {
   type: 'checkbox';
 }
 
+export interface LinkColumnDef extends BaseColumnDef {
+  type: 'link';
+  /** Where the linked file lives. Defaults to 'global' if omitted. */
+  mode: LinkMode;
+  /**
+   * Extension applied to newly created files (with leading dot, e.g. '.md').
+   * Empty string means no extension. Optional — defaults to '.md' when
+   * absent.
+   */
+  defaultExtension?: string;
+}
+
 export interface SelectOption {
   value: string;
   color: string;
@@ -44,7 +65,8 @@ export type ColumnDef =
   | SelectColumnDef
   | MultiSelectColumnDef
   | DateColumnDef
-  | CheckboxColumnDef;
+  | CheckboxColumnDef
+  | LinkColumnDef;
 
 // Filter and sort definitions
 
