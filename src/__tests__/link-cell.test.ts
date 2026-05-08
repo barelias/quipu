@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { siblingFolderPath, resolveLinkPath } from '@/extensions/database-viewer/components/cells/LinkCell';
+import { resolveLinkPath } from '@/extensions/database-viewer/components/cells/LinkCell';
+import { siblingFolderPath } from '@/services/databaseFolderSync';
 import type { LinkColumnDef } from '@/extensions/database-viewer/types';
 
 const globalCol: LinkColumnDef = {

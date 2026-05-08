@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { Popover } from 'radix-ui';
 import { LinkSimpleIcon, PlusIcon } from '@phosphor-icons/react';
 import fsService from '@/services/fileSystem';
+import { siblingFolderPath } from '@/services/databaseFolderSync';
 import { showToast } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils';
 import { useTab } from '@/context/TabContext';
@@ -27,18 +28,8 @@ function basenameWithoutExtension(p: string): string {
   return dot > 0 ? base.slice(0, dot) : base;
 }
 
-/**
- * Compute the sibling folder path for a database file. The folder lives
- * next to the .quipudb.jsonl file and shares its basename without the
- * extension, e.g. /workspace/tasks.quipudb.jsonl -> /workspace/tasks.
- */
-export function siblingFolderPath(databasePath: string): string {
-  const slash = databasePath.lastIndexOf('/');
-  const dir = slash >= 0 ? databasePath.slice(0, slash) : '';
-  const base = slash >= 0 ? databasePath.slice(slash + 1) : databasePath;
-  const stem = base.replace(/\.quipudb\.jsonl$/i, '');
-  return dir ? `${dir}/${stem}` : stem;
-}
+// `siblingFolderPath` is defined in services/databaseFolderSync.ts and
+// imported above so the path math stays in one place.
 
 /**
  * Resolve a link cell value to a full filesystem path.

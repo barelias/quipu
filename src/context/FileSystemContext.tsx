@@ -7,6 +7,12 @@ import {
   loadLastOpenedWorkspace,
   saveLastOpenedWorkspace,
 } from '../services/appConfigStore';
+import {
+  isDatabaseFile,
+  renameSiblingFolder,
+  deleteSiblingFolder,
+  siblingFolderEntries,
+} from '../services/databaseFolderSync';
 import { useToast } from '../components/ui/Toast';
 import type { FileTreeEntry, RecentWorkspace } from '../types/workspace';
 
@@ -283,7 +289,30 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
 
   const deleteEntry = useCallback(async (targetPath: string) => {
     try {
+      // Sibling-folder cascade for .quipudb.jsonl files: prompt the user
+      // before deleting non-empty sibling content; empty folders cascade
+      // silently. The database file itself is deleted regardless of the
+      // sibling-folder result.
+      let cascadeSibling = false;
+      if (isDatabaseFile(targetPath)) {
+        const probe = await siblingFolderEntries(targetPath);
+        if (probe.exists && probe.count > 0) {
+          const ok = window.confirm(
+            `Also delete the sibling folder for this database (${probe.count} file${probe.count === 1 ? '' : 's'})?`,
+          );
+          cascadeSibling = ok;
+        } else if (probe.exists) {
+          cascadeSibling = true;
+        }
+      }
+
       await fs.deletePath(targetPath);
+      if (cascadeSibling) {
+        const folderResult = await deleteSiblingFolder(targetPath);
+        if (!folderResult.ok && folderResult.error) {
+          showToast(`Database deleted; sibling folder: ${folderResult.error}`, 'warning');
+        }
+      }
       setDirectoryVersion(v => v + 1);
       if (workspacePath) await refreshDirectory(workspacePath);
     } catch (err: unknown) {
@@ -296,6 +325,17 @@ export function FileSystemProvider({ children }: FileSystemProviderProps) {
   const renameEntry = useCallback(async (oldPath: string, newPath: string) => {
     try {
       await fs.renamePath(oldPath, newPath);
+
+      // Sibling-folder cascade: if both ends look like a database file,
+      // try to rename/move the sibling folder too. Failures here only
+      // toast — the database file itself has already been renamed.
+      if (isDatabaseFile(oldPath) && isDatabaseFile(newPath)) {
+        const result = await renameSiblingFolder(oldPath, newPath);
+        if (!result.ok && result.error) {
+          showToast(`Database renamed; sibling folder: ${result.error}`, 'warning');
+        }
+      }
+
       setDirectoryVersion(v => v + 1);
       if (workspacePath) await refreshDirectory(workspacePath);
     } catch (err: unknown) {
