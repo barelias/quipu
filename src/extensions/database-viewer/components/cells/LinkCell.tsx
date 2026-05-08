@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Popover } from 'radix-ui';
-import { LinkSimpleIcon, PlusIcon } from '@phosphor-icons/react';
+import { LinkSimpleIcon, PlusIcon, FilePlusIcon } from '@phosphor-icons/react';
 import fsService from '@/services/fileSystem';
-import { siblingFolderPath } from '@/services/databaseFolderSync';
+import { siblingFolderPath, ensureSiblingFolder } from '@/services/databaseFolderSync';
 import { showToast } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils';
 import { useTab } from '@/context/TabContext';
@@ -32,6 +32,20 @@ function basenameWithoutExtension(p: string): string {
 // imported above so the path math stays in one place.
 
 /**
+ * Apply a column's default extension to a user-typed name. Empty
+ * extension means "no extension" — the name is kept verbatim. Names that
+ * already end in the extension pass through unchanged.
+ */
+export function applyDefaultExtension(name: string, defaultExtension: string | undefined): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  const ext = (defaultExtension ?? '.md').trim();
+  if (!ext) return trimmed;
+  const normalized = ext.startsWith('.') ? ext : `.${ext}`;
+  return trimmed.toLowerCase().endsWith(normalized.toLowerCase()) ? trimmed : `${trimmed}${normalized}`;
+}
+
+/**
  * Resolve a link cell value to a full filesystem path.
  *
  * - Global links: workspace-relative; resolved against `workspacePath`.
@@ -58,6 +72,8 @@ const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, wo
   const { openFile } = useTab();
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [siblingFiles, setSiblingFiles] = useState<string[]>([]);
+  const [createMode, setCreateMode] = useState(false);
+  const [newName, setNewName] = useState('');
 
   const refreshSiblingFiles = useCallback(async () => {
     if (column.mode !== 'relative' || !databaseFilePath) {
@@ -124,6 +140,58 @@ const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, wo
     onUpdate(fileName);
   }, [onUpdate]);
 
+  const closePicker = useCallback(() => {
+    setIsPickerOpen(false);
+    setCreateMode(false);
+    setNewName('');
+  }, []);
+
+  const handleCreate = useCallback(async () => {
+    const stamped = applyDefaultExtension(newName, column.defaultExtension);
+    if (!stamped) return;
+
+    if (column.mode === 'relative') {
+      if (!databaseFilePath) {
+        showToast('Cannot create file: database path unknown', 'error');
+        return;
+      }
+      const ensure = await ensureSiblingFolder(databaseFilePath);
+      if (!ensure.ok) {
+        showToast(`Sibling folder unavailable: ${ensure.error ?? 'unknown error'}`, 'error');
+        return;
+      }
+      const fullPath = `${siblingFolderPath(databaseFilePath)}/${stamped}`;
+      try {
+        await fsService.createFile(fullPath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast(`Failed to create file: ${message}`, 'error');
+        return;
+      }
+      onUpdate(stamped);
+      openFile(fullPath, stamped);
+      closePicker();
+      return;
+    }
+
+    // Global mode: file lives at workspace root (or a typed subfolder).
+    if (!workspacePath) {
+      showToast('Cannot create file: no workspace open', 'error');
+      return;
+    }
+    const fullPath = `${workspacePath}/${stamped}`;
+    try {
+      await fsService.createFile(fullPath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to create file: ${message}`, 'error');
+      return;
+    }
+    onUpdate(stamped);
+    openFile(fullPath, stamped.split('/').pop() ?? stamped);
+    closePicker();
+  }, [newName, column, databaseFilePath, workspacePath, onUpdate, openFile, closePicker]);
+
   // --- Display: linked file ---
 
   if (value) {
@@ -147,23 +215,23 @@ const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, wo
   // --- Display: empty cell with picker affordance ---
 
   return (
-    <Popover.Root open={isPickerOpen} onOpenChange={setIsPickerOpen}>
+    <Popover.Root open={isPickerOpen} onOpenChange={open => (open ? setIsPickerOpen(true) : closePicker())}>
       <Popover.Trigger asChild>
         <button
           type="button"
           className="w-full text-left min-h-[20px] flex items-center gap-1 text-xs text-text-tertiary hover:text-text-secondary"
         >
           <PlusIcon size={11} />
-          <span>{column.mode === 'relative' ? 'Pick / create' : 'Pick file'}</span>
+          <span>Pick / create</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          className="bg-bg-overlay border border-border rounded-md shadow-lg py-1 min-w-[220px] max-h-[280px] overflow-auto z-[9999]"
+          className="bg-bg-overlay border border-border rounded-md shadow-lg py-1 min-w-[240px] max-h-[300px] overflow-auto z-[9999]"
           align="start"
           sideOffset={4}
         >
-          {column.mode === 'global' && (
+          {!createMode && column.mode === 'global' && (
             <button
               type="button"
               onClick={handlePickGlobal}
@@ -172,7 +240,8 @@ const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, wo
               Pick existing file…
             </button>
           )}
-          {column.mode === 'relative' && (
+
+          {!createMode && column.mode === 'relative' && (
             <>
               <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-text-tertiary">
                 Files in {databaseFilePath ? basenameWithoutExtension(databaseFilePath).replace(/\.quipudb$/, '') : 'sibling folder'}
@@ -193,6 +262,63 @@ const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, wo
                 ))
               )}
             </>
+          )}
+
+          {!createMode && (
+            <>
+              <div className="h-px bg-border my-1" />
+              <button
+                type="button"
+                onClick={() => setCreateMode(true)}
+                className="w-full text-left px-3 py-1.5 text-sm text-text-primary hover:bg-bg-surface flex items-center gap-2"
+              >
+                <FilePlusIcon size={12} className="shrink-0 text-text-tertiary" />
+                <span>Create new…</span>
+              </button>
+            </>
+          )}
+
+          {createMode && (
+            <div className="px-3 py-2 flex flex-col gap-2">
+              <label className="text-[10px] uppercase tracking-wide text-text-tertiary">
+                New file name
+              </label>
+              <input
+                autoFocus
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCreate();
+                  } else if (e.key === 'Escape') {
+                    setCreateMode(false);
+                  }
+                }}
+                placeholder={`name${column.defaultExtension ?? '.md'}`}
+                className="px-2 py-1 text-sm bg-bg-surface border border-border rounded outline-none focus:ring-1 focus:ring-accent"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateMode(false)}
+                  className="px-2 py-1 text-xs text-text-secondary hover:text-text-primary"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCreate}
+                  disabled={!newName.trim()}
+                  className={cn(
+                    'px-2 py-1 text-xs rounded bg-accent text-white hover:bg-accent-hover',
+                    !newName.trim() && 'opacity-40 cursor-not-allowed',
+                  )}
+                >
+                  Create
+                </button>
+              </div>
+            </div>
           )}
         </Popover.Content>
       </Popover.Portal>
