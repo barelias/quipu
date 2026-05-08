@@ -73,13 +73,16 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Table container */}
+      {/* Table scroll container — horizontal scroll is internal to the
+          database, never bubbling to the document. The shared --db-h-pad
+          token aligns the first column with the title above. */}
       <div
         ref={containerRef}
         className="flex-1 overflow-auto"
+        style={{ paddingInline: 'var(--db-h-pad)' }}
       >
         <table
-          className="w-full border-collapse"
+          className="border-collapse"
           style={{ width: table.getCenterTotalSize() }}
         >
           {/* Header */}

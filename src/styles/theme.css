@@ -73,6 +73,10 @@
   --color-activity-bar: #2b4c7e;
   --color-activity-bar-text: #d0ddef;
   --color-activity-bar-active: #ffffff;
+
+  /* Database viewer — single horizontal padding token shared by title,
+     toolbar, and table container so columns align with the title. */
+  --db-h-pad: 40px;
 }
 
 /* Grain defaults (light theme) — multiply works on white backgrounds */

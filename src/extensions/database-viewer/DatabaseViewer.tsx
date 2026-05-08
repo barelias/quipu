@@ -89,7 +89,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentCh
     )}>
       {/* Header — standalone only */}
       {mode === 'standalone' && (
-        <div className="shrink-0 pt-10 pb-2 px-10">
+        <div className="shrink-0 pt-10 pb-2" style={{ paddingInline: 'var(--db-h-pad)' }}>
           <h1 className="text-2xl font-bold text-page-text mb-1">{schema.name}</h1>
           <div className="flex items-center gap-3 text-xs text-page-text/50">
             <span>
@@ -102,7 +102,10 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentCh
       )}
 
       {/* Toolbar */}
-      <div className="shrink-0 flex items-center gap-2 py-1.5 border-b border-border/30 px-10">
+      <div
+        className="shrink-0 flex items-center gap-2 py-1.5 border-b border-border/30"
+        style={{ paddingInline: 'var(--db-h-pad)' }}
+      >
         <FilterBar
           columns={schema.columns}
           filters={activeView?.filters ?? []}
