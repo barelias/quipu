@@ -1,5 +1,14 @@
 @import "tailwindcss" layer(utilities);
 
+/*
+ * Dark mode is driven by the `.dark` class on :root (set by the theme
+ * switcher). Tailwind v4 defaults to prefers-color-scheme; this custom
+ * variant rewires `dark:` utilities to fire whenever an ancestor with
+ * class="dark" is present, matching the same cascade the bare CSS
+ * variable overrides below already use.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   /* Background layers (light) */
   --color-bg-base: #f0f0f0;

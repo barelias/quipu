@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   RobotIcon,
   PencilSimpleIcon,
@@ -265,12 +265,24 @@ export default function ChatView({ tab }: ChatViewProps) {
     }
   }, [session?.messages, active]);
 
-  // Auto-grow textarea as the user types.
-  useEffect(() => {
+  // Auto-grow textarea as the user types AND when the textarea's width
+  // changes (e.g., the user split/merged panes, so this ChatView's width
+  // shrank/grew). Without the ResizeObserver, height was set once on mount
+  // for whatever width the textarea had at that moment, then stuck — after
+  // a pane split, an empty textarea could remain at the multi-line height
+  // it was last computed for. useLayoutEffect (instead of useEffect) so the
+  // height is in sync with layout before the next paint.
+  useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    const measure = () => {
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [input]);
 
   const handleSend = async () => {
@@ -901,7 +913,7 @@ export function AskQuestionBody({
         <div
           key={i}
           // Inset card — slightly lighter parchment than the outer container.
-          className="bg-[#FAF6EC] dark:bg-[#2F2C1E] rounded-2xl border border-[#D7D5B8] dark:border-[#4A4733] px-4 py-3.5"
+          className="bg-[#FAF6EC] dark:bg-[#3a3a3a] rounded-2xl border border-[#D7D5B8] dark:border-[#4a4a4a] px-4 py-3.5"
         >
           {q.header && (
             <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8A7F4F] dark:text-[#B8AC78] mb-1.5">
@@ -1023,7 +1035,7 @@ export function PermissionRequestItem({
         + border) so the card recedes into the gray theme instead of glowing
         cream against the dark background.
       */}
-      <div className="rounded-2xl border border-[#C8C7A8] bg-[#F5EFE3] dark:border-border dark:bg-bg-elevated px-5 py-4 shadow-[0_1px_2px_rgba(60,55,30,0.06),0_4px_12px_rgba(60,55,30,0.04)]">
+      <div className="rounded-2xl border border-[#C8C7A8] bg-[#F5EFE3] dark:border-[#4a4a4a] dark:bg-[#3a3a3a] px-5 py-4 shadow-[0_1px_2px_rgba(60,55,30,0.06),0_4px_12px_rgba(60,55,30,0.04)]">
         <div className="flex items-center gap-2 mb-3">
           <HeaderIcon size={14} className="text-[#7A8A4A] dark:text-success shrink-0" weight="fill" />
           <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7A8A4A] dark:text-success">
