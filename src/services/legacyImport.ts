@@ -313,8 +313,8 @@ async function importAgents(
 
     const now = new Date().toISOString();
     const agentToWrite: Agent = {
-      // id is recomputed by saveAgent from folder + slug.
-      id: '',
+      // Stable UUID assigned at import — preserved across folder/slug renames.
+      id: crypto.randomUUID(),
       name: name || 'Untitled',
       slug,
       kind,

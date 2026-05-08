@@ -14,16 +14,22 @@ export type AgentPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions
 export type AgentKind = 'agent' | 'chat';
 
 export interface Agent {
+  /**
+   * Stable UUID assigned at creation. Persisted in the JSON record. Does
+   * NOT change when the user renames the folder or slug — downstream
+   * systems (bound repo clones, session cache, tab paths) key off it,
+   * so a rename must not invalidate them. Legacy agents loaded without
+   * an `id` field temporarily carry a path-derived id and are migrated
+   * to a real UUID at workspace boot.
+   */
   id: string;
   name: string;
   /**
-   * Filesystem slug used to derive the on-disk filename for this agent
-   * (e.g. `frame-responder` -> `frame-responder.json`). Required as of
-   * Unit 6: AgentContext computes the canonical id from `folder + '/' + slug`
-   * and routes saves through `agentFileStore`, which uses this directly
-   * for the on-disk filename. Mutators auto-derive a slug from the
-   * agent's name when one isn't explicitly supplied — no callsite should
-   * need to slugify by hand.
+   * Filesystem slug used to compose the on-disk filename for this agent
+   * (e.g. `frame-responder` -> `frame-responder.json`). Together with
+   * `folder`, it determines the file location. Mutators auto-derive a
+   * slug from the agent's name when one isn't explicitly supplied — no
+   * callsite should need to slugify by hand.
    */
   slug: string;
   /** 'agent' = full configuration, opens editor on create. 'chat' = lightweight, opens chat directly. */

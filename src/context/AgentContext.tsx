@@ -8,6 +8,7 @@ import * as agentFileStore from '../services/agentFileStore';
 import * as sessionCache from '../services/sessionCache';
 import { watchDirRecursive } from '../services/quipuFileStore';
 import { importLegacyDataForWorkspace } from '../services/legacyImport';
+import { migrateLegacyAgentIds } from '../services/agentMigration';
 import { slugify, normalizeFolder, disambiguateSlug, joinId } from '../services/slug';
 import type { Agent, AgentMessage, AgentSession, AgentToolCall, AgentPermissionRequest, AgentImageAttachment } from '@/types/agent';
 
@@ -476,32 +477,37 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   /**
    * Write `agent` to disk and update React state. Slug+folder are
    * normalized + disambiguated against the live agent list before the
-   * save, so callers don't have to think about collisions. `previousId`
-   * tells the file store to delete the old file when slug or folder
-   * changed.
+   * save, so callers don't have to think about collisions.
    *
-   * Tabs that referenced the old id keep working at the visible-name
-   * level via `renameTabsByPath` — Unit 11 will repath them properly.
+   * `previousLocation` is the agent's prior on-disk location
+   * (`joinId(prevFolder, prevSlug)`) — used by the file store to delete
+   * the old file when the user renames a slug or folder. The agent's
+   * `id` (UUID) is stable across renames; it is preserved through the
+   * save and never recomputed.
+   *
+   * For brand-new agents, callers may pass an empty `incoming.id`; a
+   * UUID is generated here.
    */
   const persistAgent = useCallback(async (
     workspace: string,
     incoming: Agent,
-    previousId: string | null,
+    previousLocation: string | null,
   ): Promise<Agent | null> => {
     const folder = normalizeFolder(incoming.folder ?? '');
     const desiredSlug = (incoming.slug ?? '').trim() || slugify(incoming.name, incoming.kind);
+    const stableId = incoming.id && incoming.id.length > 0 ? incoming.id : crypto.randomUUID();
     const slug = resolveSlugForFolder(
       agentsRef.current,
       folder,
       desiredSlug,
       incoming.name,
       incoming.kind,
-      previousId,
+      stableId,
     );
-    const newId = joinId(folder, slug);
+    const newLocation = joinId(folder, slug);
     const persisted: Agent = {
       ...incoming,
-      id: newId,
+      id: stableId,
       slug,
       folder: folder === '' ? undefined : folder,
     };
@@ -510,27 +516,27 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       // Mark BOTH the new file (we're about to write it) and the old
       // file (we may delete it) as recent echoes — the watcher fires
       // for both create and unlink events.
-      const newAbs = `${workspace}/.quipu/agents/${newId}.json`;
+      const newAbs = `${workspace}/.quipu/agents/${newLocation}.json`;
       markRecentWrite(newAbs);
-      if (previousId !== null && previousId !== newId) {
-        const oldAbs = `${workspace}/.quipu/agents/${previousId}.json`;
+      if (previousLocation !== null && previousLocation !== newLocation) {
+        const oldAbs = `${workspace}/.quipu/agents/${previousLocation}.json`;
         markRecentWrite(oldAbs);
       }
-      await agentFileStore.saveAgent(workspace, persisted, previousId ?? undefined);
+      await agentFileStore.saveAgent(workspace, persisted, previousLocation ?? undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       showToast(`Failed to save agent: ${message}`, 'error');
       return null;
     }
 
-    // State update — replace if any agent shares previousId or newId,
-    // otherwise append. Use the freshest agentsRef snapshot so we don't
-    // lose interleaved updates between the save call and the setState.
+    // State update — replace by stable id. Use the freshest agentsRef
+    // snapshot so we don't lose interleaved updates between the save
+    // call and the setState.
     setAgents(prev => {
       let replaced = false;
       const next: Agent[] = [];
       for (const a of prev) {
-        if (a.id === previousId || a.id === newId) {
+        if (a.id === stableId) {
           if (!replaced) {
             next.push(persisted);
             replaced = true;
@@ -543,23 +549,20 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
 
-    // Sync any open tabs. If the id changed (slug rename or folder move),
-    // both the path AND the visible name need to update — the tab path
-    // is `agent://<id>` and stale ids no longer resolve to a file. If
-    // only the name changed, a name-only rename is enough.
-    if (previousId !== null && previousId !== newId) {
-      renameTabPath(`agent://${previousId}`, `agent://${newId}`, persisted.name);
-    } else {
-      renameTabsByPath(`agent://${newId}`, persisted.name);
-    }
+    // Sync any open tabs' visible names. The tab path `agent://<id>`
+    // stays valid because id is stable across folder/slug renames.
+    renameTabsByPath(`agent://${stableId}`, persisted.name);
 
     return persisted;
-  }, [markRecentWrite, renameTabPath, renameTabsByPath, resolveSlugForFolder, showToast]);
+  }, [markRecentWrite, renameTabsByPath, resolveSlugForFolder, showToast]);
 
   const upsertAgent = useCallback((agent: Agent): void => {
     if (!workspacePath) return;
     const previous = agentsRef.current.find(a => a.id === agent.id);
-    void persistAgent(workspacePath, agent, previous ? previous.id : null);
+    const previousLocation = previous
+      ? joinId(previous.folder ?? '', previous.slug)
+      : null;
+    void persistAgent(workspacePath, agent, previousLocation);
   }, [persistAgent, workspacePath]);
 
   const ensureAgentClones = useCallback(async (agentId: string): Promise<void> => {
@@ -593,7 +596,8 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       kind: patch.kind ?? existing.kind,
       updatedAt: now,
     };
-    void persistAgent(workspacePath, updated, existing.id);
+    const previousLocation = joinId(existing.folder ?? '', existing.slug);
+    void persistAgent(workspacePath, updated, previousLocation);
   }, [persistAgent, workspacePath]);
 
   const createChat = useCallback((opts?: { folder?: string; name?: string }): Agent => {
@@ -608,7 +612,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       'chat',
       null,
     );
-    const id = joinId(folder, slug);
+    const id = crypto.randomUUID();
     const chat: Agent = {
       id,
       slug,
@@ -1335,6 +1339,18 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       }
       if (cancelled) return;
 
+      // Assign stable UUIDs to any legacy agents whose id is still
+      // path-derived. Moves their bound scratch dir + session cache to
+      // the new UUID-keyed paths. Idempotent — already-migrated agents
+      // are skipped.
+      let migratedIds = new Map<string, string>();
+      try {
+        migratedIds = await migrateLegacyAgentIds(workspace);
+      } catch (err) {
+        console.warn('[agent-migration] failed:', err);
+      }
+      if (cancelled) return;
+
       const result = await reloadAgentsAndFolders(workspace, () => cancelled);
       if (cancelled) return;
       if (!result) {
@@ -1348,6 +1364,20 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
 
       setAgents(result.agents);
       setFolderPaths(result.folders);
+
+      // Repath any open tabs that reference a migrated agent's old id.
+      // The visible name comes from the now-loaded agent record. Both
+      // chat (`agent://`) and editor (`agent-editor://`) tab paths are
+      // updated.
+      if (migratedIds.size > 0) {
+        const byUuid = new Map(result.agents.map(a => [a.id, a.name] as const));
+        for (const [legacyId, uuid] of migratedIds) {
+          const name = byUuid.get(uuid);
+          if (name === undefined) continue;
+          renameTabPath(`agent://${legacyId}`, `agent://${uuid}`, name);
+          renameTabPath(`agent-editor://${legacyId}`, `agent-editor://${uuid}`, name);
+        }
+      }
 
       // Hydrate session cache for any agent that has a persisted transcript.
       // This is fire-and-forget per agent — a missing/corrupt cache file

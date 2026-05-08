@@ -5,9 +5,14 @@
  *
  * Layout assumption: `<workspacePath>/.quipu/agents/<folder>/<slug>.json`.
  * - Multi-level folders are real on-disk directories.
- * - An entity's id is its folder-relative slug-path (`research/foo`),
- *   derived at load time from the file's location. The id is NOT
- *   serialized — `folder` and `slug` are, for self-description.
+ * - The on-disk **file location** is `<folder>/<slug>.json` — what
+ *   moves when the user renames a folder or changes a slug.
+ * - The agent's **id** is a stable UUID, persisted inside the JSON. It
+ *   never changes once assigned, so downstream systems (bound clones,
+ *   session cache, tab paths) survive folder/slug renames.
+ * - Legacy agents loaded from disk without an `id` field get a derived
+ *   id (`joinId(folder, slug)`) for backward compatibility; they are
+ *   migrated to UUIDs by `AgentContext`'s startup migration.
  * - Empty folders persist via a `.folder.json` marker file.
  */
 
@@ -94,8 +99,11 @@ function normalizeLoaded(raw: unknown, relativePath: string): Agent {
     throw new Error('Agent file is not an object');
   }
   const record = raw as Partial<Agent> & { id?: unknown; slug?: unknown; folder?: unknown };
-  const id = relPathToId(relativePath);
-  const { folder, slug } = splitId(id);
+  const pathId = relPathToId(relativePath);
+  const { folder, slug } = splitId(pathId);
+  // Stable UUID from JSON wins; fall back to the path-derived id for
+  // legacy records (boot-time migration assigns a real UUID and rewrites).
+  const id = typeof record.id === 'string' && record.id.length > 0 ? record.id : pathId;
   if (typeof record.name !== 'string') {
     throw new Error('Agent file is missing required "name" field');
   }
@@ -116,13 +124,14 @@ function normalizeLoaded(raw: unknown, relativePath: string): Agent {
   } as Agent;
 }
 
-/** Strip derived fields before serializing an agent to disk. */
+/** Serialize an agent for disk. `id` is a stable UUID and IS persisted —
+ *  downstream systems (clones, sessions, tab paths) key off it, so it must
+ *  survive folder/slug renames. `slug`/`folder` are persisted too for
+ *  self-description, even though the on-disk filename is the source of truth. */
 function toDiskRecord(agent: Agent, slug: string, folder: string): Record<string, unknown> {
-  // Spread, drop derived fields, then enforce the canonical shape.
-  // `id` is derived from the file location and must not be persisted.
   const record: Record<string, unknown> = { ...agent };
-  delete record.id;
   record.schemaVersion = 1;
+  record.id = agent.id;
   record.slug = slug;
   record.folder = folder;
   return record;
@@ -232,12 +241,16 @@ export async function loadAllFolders(workspacePath: string): Promise<FolderNode[
 }
 
 /**
- * Save `agent` to disk. The agent's id is recomputed from its current
- * folder + slug. If `previousId` is provided AND differs from the new
- * computed id, the old file is deleted after the new one is written
- * (atomic rename semantics: write new, then delete old, never the reverse).
+ * Save `agent` to disk at `<folder>/<slug>.json`.
  *
- * Returns the new id.
+ * `previousLocation` is the OLD on-disk location (`joinId(prevFolder,
+ * prevSlug)`) — when present and different from the new location, the
+ * old file is deleted after the new one is written (atomic-rename
+ * semantics: write new, then delete old, never the reverse). The
+ * agent's `id` (UUID) is unrelated to its on-disk location and is NOT
+ * recomputed by this function — it stays stable across renames.
+ *
+ * Returns the agent's id (the same UUID the caller passed in).
  *
  * Caller is responsible for normalizing `agent.folder` (via
  * `normalizeFolder`) and slugifying `agent.slug` (via `slugify` +
@@ -248,24 +261,27 @@ export async function loadAllFolders(workspacePath: string): Promise<FolderNode[
 export async function saveAgent(
   workspacePath: string,
   agent: Agent,
-  previousId?: string,
+  previousLocation?: string,
 ): Promise<string> {
   const folder = agent.folder ?? '';
   const slug = agent.slug ?? '';
   if (slug === '') {
     throw new Error('saveAgent: agent.slug is required');
   }
-  const newId = joinId(folder, slug);
-  const newAbs = agentFilePath(workspacePath, newId);
+  if (typeof agent.id !== 'string' || agent.id.length === 0) {
+    throw new Error('saveAgent: agent.id is required');
+  }
+  const newLocation = joinId(folder, slug);
+  const newAbs = agentFilePath(workspacePath, newLocation);
   const record = toDiskRecord(agent, slug, folder);
   await ensureDir(folderAbsPath(workspacePath, folder));
   await writeJsonFile(newAbs, record);
   // Atomic rename semantics: write new first, then delete old.
-  if (previousId !== undefined && previousId !== newId) {
-    const oldAbs = agentFilePath(workspacePath, previousId);
+  if (previousLocation !== undefined && previousLocation !== newLocation) {
+    const oldAbs = agentFilePath(workspacePath, previousLocation);
     await deleteFile(oldAbs);
   }
-  return newId;
+  return agent.id;
 }
 
 /**
@@ -355,12 +371,13 @@ export async function deleteFolder(
       const oldId = relPathToId(entry.relativePath);
       // `entry.relativePath` here is RELATIVE TO `abs` (the deleted
       // folder's root), so the slug component is the leaf of that path.
-      const oldFullId = `${folderPath}/${oldId}`;
+      const oldFullLocation = `${folderPath}/${oldId}`;
       const oldSlug = splitId(oldId).slug;
       const newSlug = disambiguateSlug(oldSlug, destSiblings);
       destSiblings.add(newSlug);
 
       // Read, rewrite slug+folder, save into destination, delete original.
+      // Agent's stable id (UUID) is preserved across the move.
       const raw = await readJsonFile<unknown>(entry.absolutePath);
       if (raw === null) continue;
       let agent: Agent;
@@ -372,7 +389,7 @@ export async function deleteFolder(
       }
       agent.folder = destFolder;
       agent.slug = newSlug;
-      await saveAgent(workspacePath, agent, oldFullId);
+      await saveAgent(workspacePath, agent, oldFullLocation);
     }
   }
 
