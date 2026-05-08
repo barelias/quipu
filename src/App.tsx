@@ -867,30 +867,58 @@ function AppContent() {
       const callback = detail?.callback as ((path: string) => void) | undefined;
       if (!callback) return;
 
-      try {
-        const filePath = await fs.openFileDialog({
-          filters: [{ name: 'Quipu Database', extensions: ['quipudb.jsonl'] }],
-        });
-
-        if (filePath) {
-          const relativePath = workspacePath && filePath.startsWith(workspacePath)
-            ? filePath.slice(workspacePath.length + 1)
-            : filePath;
-          callback(relativePath);
-        }
-      } catch {
-        // File dialog not available (browser mode or Electron handler not registered)
-        // Fall back to asking for a path
+      // Browser mode and unavailable-handler cases both surfaced as
+      // "Link Database does nothing" because the previous version only
+      // fell back inside the catch path. fs.openFileDialog returns null
+      // (no throw) in browser mode, so the catch never fired.
+      const promptForPath = () => {
         setInputDialogValue('');
         setInputDialog({
           title: 'Link Database',
-          placeholder: 'Path to .quipudb.jsonl file',
+          placeholder: 'Path to .quipudb.jsonl file (relative to workspace)',
           defaultValue: '',
           onSubmit: (path: string) => {
-            if (path.trim()) callback(path.trim());
+            const trimmed = path.trim();
+            if (trimmed) callback(trimmed);
           },
         });
+      };
+
+      const hasNativeDialog = !!window.electronAPI?.openFileDialog;
+      if (!hasNativeDialog) {
+        promptForPath();
+        return;
       }
+
+      let filePath: string | null = null;
+      try {
+        filePath = await fs.openFileDialog({
+          // Compound extensions are inconsistent across OS pickers, so we
+          // accept both the canonical .quipudb.jsonl and bare .jsonl.
+          filters: [
+            { name: 'Quipu Database', extensions: ['quipudb.jsonl', 'jsonl'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        });
+      } catch {
+        // Native dialog handler crashed or is missing — fall back so the
+        // user can still link a database.
+        promptForPath();
+        return;
+      }
+
+      // null filePath = user canceled the dialog. Silent — no toast.
+      if (!filePath) return;
+
+      let relativePath = filePath;
+      if (workspacePath && filePath.startsWith(workspacePath)) {
+        relativePath = filePath.slice(workspacePath.length + 1);
+      } else if (workspacePath) {
+        // Path outside the workspace — store absolute but warn the user
+        // so they know the link won't travel with the workspace.
+        showToast('Linked database is outside the workspace', 'warning');
+      }
+      callback(relativePath);
     };
 
     const handleCreateDatabase = (e: Event) => {
