@@ -225,6 +225,9 @@ async function mountDatabaseViewer(src: string, container: HTMLElement): Promise
       content,
       onContentChange,
       mode: 'inline',
+      // Pass the resolved full path so link cells can resolve sibling
+      // folders for relative-mode links.
+      databaseFilePath: fullPath,
     }),
   );
   return root;

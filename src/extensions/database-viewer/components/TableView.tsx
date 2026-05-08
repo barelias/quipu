@@ -21,11 +21,27 @@ interface TableViewProps {
   removeColumn?: (columnId: string) => void;
   changeColumnType?: (columnId: string, newType: ColumnType) => void;
   onAddColumn?: () => void;
+  // Required for link cells to resolve sibling folders + workspace-relative
+  // global paths. Optional so non-link tables work without plumbing.
+  databaseFilePath?: string | null;
+  workspacePath?: string | null;
 }
 
 const ROW_HEIGHT = 36;
 
-const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow, deleteRow, renameColumn, removeColumn, changeColumnType, onAddColumn }) => {
+const TableView: React.FC<TableViewProps> = ({
+  schema,
+  rows,
+  updateCell,
+  addRow,
+  deleteRow,
+  renameColumn,
+  removeColumn,
+  changeColumnType,
+  onAddColumn,
+  databaseFilePath = null,
+  workspacePath = null,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const columns = useColumnDefs(schema);
 
@@ -39,6 +55,8 @@ const TableView: React.FC<TableViewProps> = ({ schema, rows, updateCell, addRow,
     getRowId: (row) => row._id,
     meta: {
       updateCell,
+      databaseFilePath,
+      workspacePath,
     },
   });
 

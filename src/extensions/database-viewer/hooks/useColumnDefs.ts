@@ -1,18 +1,28 @@
 import React, { useMemo } from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
 import type { ColumnDef as TanstackColumnDef, CellContext } from '@tanstack/react-table';
-import type { DatabaseRow, DatabaseSchema, ColumnDef, SelectColumnDef, MultiSelectColumnDef } from '../types';
+import type {
+  DatabaseRow,
+  DatabaseSchema,
+  ColumnDef,
+  SelectColumnDef,
+  MultiSelectColumnDef,
+  LinkColumnDef,
+} from '../types';
 import TextCell from '../components/cells/TextCell';
 import NumberCell from '../components/cells/NumberCell';
 import SelectCell from '../components/cells/SelectCell';
 import MultiSelectCell from '../components/cells/MultiSelectCell';
 import DateCell from '../components/cells/DateCell';
 import CheckboxCell from '../components/cells/CheckboxCell';
+import LinkCell from '../components/cells/LinkCell';
 
 const columnHelper = createColumnHelper<DatabaseRow>();
 
 interface TableMeta {
   updateCell: (rowId: string, columnId: string, value: unknown) => void;
+  databaseFilePath: string | null;
+  workspacePath: string | null;
 }
 
 /**
@@ -56,6 +66,14 @@ function renderCell(info: CellContext<DatabaseRow, unknown>, col: ColumnDef): Re
       return React.createElement(CheckboxCell, {
         value: Boolean(value),
         onUpdate: (v: boolean) => update(v),
+      });
+    case 'link':
+      return React.createElement(LinkCell, {
+        value: (value as string | null) ?? null,
+        column: col as LinkColumnDef,
+        databaseFilePath: meta?.databaseFilePath ?? null,
+        workspacePath: meta?.workspacePath ?? null,
+        onUpdate: (v: string | null) => update(v),
       });
     default:
       return String(value ?? '');

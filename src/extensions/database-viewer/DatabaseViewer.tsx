@@ -4,6 +4,7 @@ import { Table, SquaresFour } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useDatabase } from './hooks/useDatabase';
 import { useDatabaseFilters } from './hooks/useDatabaseFilters';
+import { useFileSystem } from '@/context/FileSystemContext';
 import TableView from './components/TableView';
 import BoardView from './components/BoardView';
 import FilterBar from './components/FilterBar';
@@ -18,10 +19,25 @@ export interface DatabaseViewerProps {
   onContentChange?: (content: string) => void;
   isActive?: boolean;
   mode?: 'standalone' | 'inline';
+  /**
+   * Full path to the .quipudb.jsonl file backing this view. Required for
+   * link columns (relative-mode resolution + create-new-file). Optional in
+   * standalone mode because activeFile.path is used as a fallback. Inline
+   * mode passes this explicitly from the EmbeddedDatabase node.
+   */
+  databaseFilePath?: string | null;
 }
 
-const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentChange, content: directContent, mode = 'standalone' }) => {
+const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
+  activeFile,
+  onContentChange,
+  content: directContent,
+  mode = 'standalone',
+  databaseFilePath,
+}) => {
+  const { workspacePath } = useFileSystem();
   const content = directContent !== undefined ? directContent : (typeof activeFile?.content === 'string' ? activeFile.content : null);
+  const resolvedDatabasePath = databaseFilePath ?? activeFile?.path ?? null;
   const [isAddColumnOpen, setIsAddColumnOpen] = useState(false);
 
   const {
@@ -163,6 +179,8 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({ activeFile, onContentCh
             removeColumn={removeColumn}
             changeColumnType={changeColumnType}
             onAddColumn={() => setIsAddColumnOpen(true)}
+            databaseFilePath={resolvedDatabasePath}
+            workspacePath={workspacePath}
           />
         )}
       </div>
