@@ -6,9 +6,18 @@ import React from 'react';
 import fs from '../../../services/fileSystem';
 
 /**
- * TipTap node extension for inline-embedded databases.
- * Renders a live interactive DatabaseViewer inside the document.
- * Serializes to markdown as: ![[path/to/file.quipudb.jsonl]]
+ * TipTap node for inline-embedded databases. Renders a live interactive
+ * DatabaseViewer inside the document. Serializes to markdown as
+ * `![[path/to/file.quipudb.jsonl]]`.
+ *
+ * Layout is CSS-only — see `.embedded-database-wrapper` in prosemirror.css.
+ * The embed lives inside the document column; horizontal overflow scrolls
+ * inside the database container instead of the document.
+ *
+ * The header bar shows the database's display name and a "..." menu for
+ * Change source / Open standalone. Changing the source mutates the node's
+ * `src` attribute; TipTap re-creates the node view, which remounts the
+ * React root with the new file.
  */
 export const EmbeddedDatabase = Node.create({
   name: 'embeddedDatabase',
@@ -51,9 +60,9 @@ export const EmbeddedDatabase = Node.create({
   },
 
   addNodeView() {
-    return ({ node }) => {
+    return ({ node, getPos, editor }) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'embedded-database-wrapper my-4 border-y border-border/30 overflow-hidden';
+      wrapper.className = 'embedded-database-wrapper';
       wrapper.setAttribute('data-type', 'embedded-database');
       wrapper.contentEditable = 'false';
 
@@ -61,46 +70,113 @@ export const EmbeddedDatabase = Node.create({
       const fileName = src?.split('/').pop() || 'database';
       const displayName = fileName.replace('.quipudb.jsonl', '');
 
-      // Header bar (clickable to open standalone view)
+      // Header
       const header = document.createElement('div');
-      header.className = 'flex items-center gap-2 px-4 py-2 cursor-pointer hover:bg-page-text/[0.03] transition-colors border-b border-border/20';
-      header.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor" style="opacity:0.4;flex-shrink:0">
+      header.className = 'embedded-database-header';
+
+      const icon = document.createElement('span');
+      icon.style.opacity = '0.5';
+      icon.style.flexShrink = '0';
+      icon.innerHTML = `<svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">
           <path d="M224,48H32A8,8,0,0,0,24,56V200a8,8,0,0,0,8,8H224a8,8,0,0,0,8-8V56A8,8,0,0,0,224,48Zm-8,16V96H40V64ZM40,112H88v32H40Zm0,48H88v32H40Zm176,32H104V112H216Zm0-80H104V80H216Z"/>
-        </svg>
-        <span style="font-weight:500;opacity:0.7">${displayName}</span>
-        <span style="font-size:11px;opacity:0.3;margin-left:auto">${src}</span>
-      `;
-      header.addEventListener('click', () => {
+        </svg>`;
+      header.appendChild(icon);
+
+      const name = document.createElement('span');
+      name.className = 'embedded-database-header-name';
+      name.textContent = displayName;
+      name.title = src ? `Click to open ${src}` : 'Click to open database';
+      name.addEventListener('click', () => {
         window.dispatchEvent(new CustomEvent('quipu:open-embedded-database', { detail: { src } }));
       });
+      header.appendChild(name);
+
+      // Dropdown menu
+      const menuContainer = document.createElement('div');
+      menuContainer.className = 'embedded-database-header-menu';
+
+      const menuButton = document.createElement('button');
+      menuButton.className = 'embedded-database-header-button';
+      menuButton.setAttribute('aria-label', 'Database options');
+      menuButton.title = 'Database options';
+      menuButton.textContent = '⋯'; // horizontal ellipsis (⋯)
+      menuContainer.appendChild(menuButton);
+
+      let popup: HTMLDivElement | null = null;
+      const closeMenu = () => {
+        if (popup) {
+          popup.remove();
+          popup = null;
+          document.removeEventListener('mousedown', handleOutsideClick);
+        }
+      };
+      const handleOutsideClick = (event: MouseEvent) => {
+        const target = event.target as Node | null;
+        if (!popup || !target) return;
+        if (!popup.contains(target) && !menuButton.contains(target)) {
+          closeMenu();
+        }
+      };
+
+      const openMenu = () => {
+        if (popup) {
+          closeMenu();
+          return;
+        }
+        popup = document.createElement('div');
+        popup.className = 'embedded-database-menu-popup';
+
+        const changeItem = document.createElement('button');
+        changeItem.type = 'button';
+        changeItem.className = 'embedded-database-menu-item';
+        changeItem.textContent = 'Change source database…';
+        changeItem.addEventListener('click', () => {
+          closeMenu();
+          window.dispatchEvent(new CustomEvent('quipu:pick-database', {
+            detail: {
+              callback: (newSrc: string) => {
+                if (!newSrc || newSrc === src) return;
+                const pos = typeof getPos === 'function' ? getPos() : null;
+                if (pos == null || !editor) return;
+                editor
+                  .chain()
+                  .focus()
+                  .command(({ tr }) => {
+                    tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: newSrc });
+                    return true;
+                  })
+                  .run();
+              },
+            },
+          }));
+        });
+        popup.appendChild(changeItem);
+
+        const openItem = document.createElement('button');
+        openItem.type = 'button';
+        openItem.className = 'embedded-database-menu-item';
+        openItem.textContent = 'Open standalone';
+        openItem.addEventListener('click', () => {
+          closeMenu();
+          window.dispatchEvent(new CustomEvent('quipu:open-embedded-database', { detail: { src } }));
+        });
+        popup.appendChild(openItem);
+
+        menuContainer.appendChild(popup);
+        document.addEventListener('mousedown', handleOutsideClick);
+      };
+
+      menuButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMenu();
+      });
+
+      header.appendChild(menuContainer);
       wrapper.appendChild(header);
 
       // React container for DatabaseViewer
       const reactContainer = document.createElement('div');
       wrapper.appendChild(reactContainer);
-
-      // Full-bleed: expand to fill the editor panel width (not just the 816px document column)
-      let resizeObserver: ResizeObserver | null = null;
-
-      const updateFullBleed = () => {
-        const scrollContainer = wrapper.closest('[class*="overflow-y-auto"]') as HTMLElement | null;
-        if (!scrollContainer) return;
-        const containerLeft = scrollContainer.getBoundingClientRect().left;
-        const wrapperLeft = wrapper.getBoundingClientRect().left;
-        const offsetLeft = wrapperLeft - containerLeft;
-        wrapper.style.width = `${scrollContainer.clientWidth}px`;
-        wrapper.style.marginLeft = `-${offsetLeft}px`;
-      };
-
-      requestAnimationFrame(() => {
-        updateFullBleed();
-        const scrollContainer = wrapper.closest('[class*="overflow-y-auto"]') as HTMLElement | null;
-        if (scrollContainer) {
-          resizeObserver = new ResizeObserver(updateFullBleed);
-          resizeObserver.observe(scrollContainer);
-        }
-      });
 
       // Mount DatabaseViewer
       let root: Root | null = null;
@@ -112,7 +188,7 @@ export const EmbeddedDatabase = Node.create({
         dom: wrapper,
         contentDOM: undefined,
         destroy() {
-          resizeObserver?.disconnect();
+          closeMenu();
           root?.unmount();
         },
       };

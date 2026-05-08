@@ -326,11 +326,94 @@ mark.comment:hover {
 
 /* --- Embedded Database --- */
 
-/* CSS baseline: escape the TipTap page's horizontal padding (px-10 = 40px each side).
-   The JS in EmbeddedDatabase.ts then extends this to the full editor panel width. */
+/* The embed lives inside the document column. Horizontal overflow scrolls
+   internally to the database container, never to the document. Replaces a
+   prior ResizeObserver-driven full-bleed hack — alignment now comes from
+   CSS alone, no per-frame JS. */
 .embedded-database-wrapper {
-  margin-left: -40px;
-  width: calc(100% + 80px);
+  display: block;
+  width: 100%;
+  margin: 1rem 0;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.embedded-database-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+}
+
+.embedded-database-header-name {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.embedded-database-header-name:hover {
+  color: var(--color-text-primary);
+}
+
+.embedded-database-header-menu {
+  position: relative;
+}
+
+.embedded-database-header-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+}
+
+.embedded-database-header-button:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-overlay);
+}
+
+.embedded-database-menu-popup {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  min-width: 200px;
+  z-index: 30;
+  padding: 0.25rem;
+}
+
+.embedded-database-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+
+.embedded-database-menu-item:hover {
+  background: var(--color-bg-elevated);
 }
 
 /* --- LaTeX block ---
