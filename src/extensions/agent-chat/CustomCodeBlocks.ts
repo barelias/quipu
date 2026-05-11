@@ -83,12 +83,20 @@ export function unmountCustomCodeBlocks(root: HTMLElement): void {
   wrappers.forEach((wrapper) => {
     const r = containerToRoot.get(wrapper);
     if (!r) return;
-    try {
-      r.unmount();
-    } catch {
-      /* swallow — element already gone */
-    }
     containerToRoot.delete(wrapper);
     trackedRoots.delete(r);
+    // Defer the unmount: when MessageMarkdown's effect re-runs (e.g. on
+    // streaming body updates), React's parent commit is still in flight,
+    // and a synchronous root.unmount() trips a "Attempted to synchronously
+    // unmount a root while React was already rendering" warning. The host
+    // element is removed via innerHTML before the microtask fires, so the
+    // root is already orphaned by the time unmount lands.
+    queueMicrotask(() => {
+      try {
+        r.unmount();
+      } catch {
+        /* swallow — element already gone */
+      }
+    });
   });
 }
