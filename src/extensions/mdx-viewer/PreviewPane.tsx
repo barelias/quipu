@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { compileMdxSource, type CompileResult } from '@/extensions/mdx-runtime/compile';
 import { MdxErrorBoundary, MdxErrorPre } from '@/extensions/mdx-runtime/MdxErrorBoundary';
+import { ChartFileContext } from '@/extensions/mdx-runtime/charts/ChartFileContext';
+
+const WATCHING_OPTIONS = { watch: true } as const;
 
 interface PreviewPaneProps {
   source: string;
@@ -49,19 +52,21 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({ source, debounceMs = 500 }) =
   }, [source, debounceMs]);
 
   return (
-    <div className="w-full h-full overflow-auto py-3" style={{ paddingInline: 'var(--db-h-pad)' }}>
-      {state.kind === 'pending' && (
-        <div className="text-xs text-text-tertiary">Compiling…</div>
-      )}
-      {state.kind === 'error' && (
-        <MdxErrorPre stage={state.stage} message={state.error} source={source} />
-      )}
-      {state.kind === 'ready' && (
-        <MdxErrorBoundary source={source}>
-          <state.Content />
-        </MdxErrorBoundary>
-      )}
-    </div>
+    <ChartFileContext.Provider value={WATCHING_OPTIONS}>
+      <div className="w-full h-full overflow-auto py-3" style={{ paddingInline: 'var(--db-h-pad)' }}>
+        {state.kind === 'pending' && (
+          <div className="text-xs text-text-tertiary">Compiling…</div>
+        )}
+        {state.kind === 'error' && (
+          <MdxErrorPre stage={state.stage} message={state.error} source={source} />
+        )}
+        {state.kind === 'ready' && (
+          <MdxErrorBoundary source={source}>
+            <state.Content />
+          </MdxErrorBoundary>
+        )}
+      </div>
+    </ChartFileContext.Provider>
   );
 };
 

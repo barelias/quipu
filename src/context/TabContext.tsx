@@ -1074,6 +1074,11 @@ export function TabProvider({ children }: TabProviderProps) {
       if (!filename) return;
       const fullPath = workspacePath + '/' + filename.replace(/\\/g, '/');
 
+      // Broadcast a file-changed window event so non-tab consumers
+      // (e.g. live MDX chart previews) can react without having to
+      // claim the single-slot Electron IPC listener themselves.
+      window.dispatchEvent(new CustomEvent('quipu:file-changed', { detail: { path: fullPath } }));
+
       const savedAt = recentSavesRef.current.get(fullPath);
       if (savedAt && Date.now() - savedAt < 3000) return;
 
@@ -1104,6 +1109,11 @@ export function TabProvider({ children }: TabProviderProps) {
       const filename = event.filename ?? event.path;
       if (!filename) return;
       const fullPath = workspacePath + '/' + filename.replace(/\\/g, '/');
+
+      // Broadcast a file-changed window event so non-tab consumers
+      // (e.g. live MDX chart previews) can react without holding their
+      // own WebSocket / IPC subscription.
+      window.dispatchEvent(new CustomEvent('quipu:file-changed', { detail: { path: fullPath } }));
 
       const savedAt = recentSavesRef.current.get(fullPath);
       if (savedAt && Date.now() - savedAt < 3000) return;

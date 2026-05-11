@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import fs from '@/services/fileSystem';
 import { parseQuipuDb } from '@/extensions/database-viewer/utils/jsonl';
+import { ChartFileContext } from './ChartFileContext';
+
+const WATCH_DEBOUNCE_MS = 250;
 
 /**
  * File-driven chart data loader.
@@ -114,13 +117,21 @@ export async function parseChartFile(text: string, format: ReturnType<typeof det
 }
 
 /**
- * Hook: load `src` once on mount. Returns loading state, the parsed
- * rows, or an error string. Chat blocks are ephemeral so we don't watch
- * the file for changes here — that lives in the future standalone MDX
- * viewer, which can wrap this loader with the existing file-watcher.
+ * Hook: load `src`, parse by extension, and return rows for charts to
+ * render.
+ *
+ * By default the file is loaded once on mount — chat messages are
+ * ephemeral and watching every chart in scrollback would leak listeners.
+ * When the surrounding `ChartFileContext` enables watching (the
+ * standalone MDX viewer does this for its preview pane), the hook also
+ * listens for `quipu:file-changed` window events (dispatched by
+ * TabContext from the workspace's file watcher) and re-reads on a
+ * 250ms debounce so a flurry of save events collapses to one reload.
  */
 export function useChartFile(src: string | undefined): ChartDataState {
   const [state, setState] = useState<ChartDataState>(EMPTY);
+  const { watch } = useContext(ChartFileContext);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!src) {
@@ -128,26 +139,50 @@ export function useChartFile(src: string | undefined): ChartDataState {
       return;
     }
     let cancelled = false;
-    setState({ rows: null, error: null, loading: true });
+    const workspacePath = getWorkspacePath();
+    const fullPath = resolveChartSrc(src, workspacePath);
 
-    (async () => {
+    async function load() {
+      setState(prev => ({ rows: prev.rows, error: null, loading: true }));
       try {
-        const workspacePath = getWorkspacePath();
-        const fullPath = resolveChartSrc(src, workspacePath);
         const text = await fs.readFile(fullPath);
-        const rows = await parseChartFile(text, detectFormat(src));
+        const rows = await parseChartFile(text, detectFormat(src!));
         if (cancelled) return;
         setState({ rows, error: null, loading: false });
       } catch (err) {
         if (cancelled) return;
         setState({ rows: null, error: err instanceof Error ? err.message : String(err), loading: false });
       }
-    })();
+    }
+
+    void load();
+
+    if (!watch) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // Watching: re-read on any quipu:file-changed event whose path
+    // matches our resolved fullPath. Multiple chart components can co-
+    // subscribe — window events are multi-listener, no IPC clobber.
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { path?: string } | undefined;
+      if (!detail?.path) return;
+      if (detail.path !== fullPath) return;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        if (!cancelled) void load();
+      }, WATCH_DEBOUNCE_MS);
+    };
+    window.addEventListener('quipu:file-changed', handler);
 
     return () => {
       cancelled = true;
+      window.removeEventListener('quipu:file-changed', handler);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [src]);
+  }, [src, watch]);
 
   return state;
 }
