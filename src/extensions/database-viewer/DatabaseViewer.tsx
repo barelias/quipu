@@ -110,8 +110,11 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
     <div className={cn(
       'flex flex-col bg-page-bg overflow-hidden',
       mode === 'standalone' && 'flex-1',
-      mode === 'inline' && 'max-h-[400px]',
-      isChat && 'max-h-[360px] rounded-md border border-border bg-bg-surface',
+      // Inline mode is hosted inside a TipTap block (display: block, no
+      // parent flex height). Without min-h the inner flex-1 view content
+      // resolves to 0 and the embed collapses to just the toolbar.
+      mode === 'inline' && 'min-h-[280px] max-h-[400px]',
+      isChat && 'min-h-[280px] max-h-[360px] rounded-md border border-border bg-bg-surface',
     )}>
       {/* Header — standalone only */}
       {mode === 'standalone' && (

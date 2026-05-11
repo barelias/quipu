@@ -125,6 +125,16 @@ export const EmbeddedMdx = Node.create({
         popup = document.createElement('div');
         popup.className = 'embedded-mdx-menu-popup';
 
+        const refreshItem = document.createElement('button');
+        refreshItem.type = 'button';
+        refreshItem.className = 'embedded-mdx-menu-item';
+        refreshItem.textContent = 'Refresh from disk';
+        refreshItem.addEventListener('click', () => {
+          closeMenu();
+          remountEmbeddedMdx();
+        });
+        popup.appendChild(refreshItem);
+
         const changeItem = document.createElement('button');
         changeItem.type = 'button';
         changeItem.className = 'embedded-mdx-menu-item';
@@ -177,10 +187,18 @@ export const EmbeddedMdx = Node.create({
       const reactContainer = document.createElement('div');
       wrapper.appendChild(reactContainer);
 
+      // Mount the preview; refresh = unmount the current root (deferred,
+      // matching the destroy() pattern) then remount with a fresh read.
       let root: Root | null = null;
-      mountEmbeddedMdx(src, reactContainer).then(mountedRoot => {
-        root = mountedRoot;
-      });
+      const remountEmbeddedMdx = () => {
+        const prev = root;
+        root = null;
+        if (prev) queueMicrotask(() => { try { prev.unmount(); } catch { /* */ } });
+        mountEmbeddedMdx(src, reactContainer).then(mountedRoot => {
+          root = mountedRoot;
+        });
+      };
+      remountEmbeddedMdx();
 
       return {
         dom: wrapper,

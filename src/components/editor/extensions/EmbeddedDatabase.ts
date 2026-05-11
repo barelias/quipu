@@ -126,6 +126,16 @@ export const EmbeddedDatabase = Node.create({
         popup = document.createElement('div');
         popup.className = 'embedded-database-menu-popup';
 
+        const refreshItem = document.createElement('button');
+        refreshItem.type = 'button';
+        refreshItem.className = 'embedded-database-menu-item';
+        refreshItem.textContent = 'Refresh from disk';
+        refreshItem.addEventListener('click', () => {
+          closeMenu();
+          remountDatabaseViewer();
+        });
+        popup.appendChild(refreshItem);
+
         const changeItem = document.createElement('button');
         changeItem.type = 'button';
         changeItem.className = 'embedded-database-menu-item';
@@ -178,11 +188,18 @@ export const EmbeddedDatabase = Node.create({
       const reactContainer = document.createElement('div');
       wrapper.appendChild(reactContainer);
 
-      // Mount DatabaseViewer
+      // Mount DatabaseViewer; refresh = unmount the current root (deferred,
+      // same micro-task pattern as destroy) then remount from disk.
       let root: Root | null = null;
-      mountDatabaseViewer(src, reactContainer).then(mountedRoot => {
-        root = mountedRoot;
-      });
+      const remountDatabaseViewer = () => {
+        const prev = root;
+        root = null;
+        if (prev) queueMicrotask(() => { try { prev.unmount(); } catch { /* */ } });
+        mountDatabaseViewer(src, reactContainer).then(mountedRoot => {
+          root = mountedRoot;
+        });
+      };
+      remountDatabaseViewer();
 
       return {
         dom: wrapper,
