@@ -163,6 +163,43 @@ const SLASH_ITEMS: SlashCommandItem[] = [
       }));
     },
   },
+  // MDX
+  {
+    title: 'Link MDX',
+    description: 'Embed an existing .mdx document',
+    icon: '◧',
+    category: 'MDX',
+    command: (editor, range) => {
+      window.dispatchEvent(new CustomEvent('quipu:pick-mdx', {
+        detail: {
+          callback: (filePath: string) => {
+            editor.chain().focus().deleteRange(range).insertContent({
+              type: 'embeddedMdx',
+              attrs: { src: filePath },
+            }).run();
+          },
+        },
+      }));
+    },
+  },
+  {
+    title: 'Create MDX',
+    description: 'Create and embed a new .mdx document here',
+    icon: '+◧',
+    category: 'MDX',
+    command: (editor, range) => {
+      window.dispatchEvent(new CustomEvent('quipu:create-mdx', {
+        detail: {
+          callback: (filePath: string) => {
+            editor.chain().focus().deleteRange(range).insertContent({
+              type: 'embeddedMdx',
+              attrs: { src: filePath },
+            }).run();
+          },
+        },
+      }));
+    },
+  },
 ];
 
 /**

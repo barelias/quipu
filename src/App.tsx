@@ -964,13 +964,110 @@ function AppContent() {
       openFile(fullPath, fileName);
     };
 
+    // --- MDX inline-embed support — mirrors the database flow exactly,
+    //     down to the browser-mode fallback for the picker.
+    const handlePickMdx = async (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const callback = detail?.callback as ((path: string) => void) | undefined;
+      if (!callback) return;
+
+      const promptForPath = () => {
+        setInputDialogValue('');
+        setInputDialog({
+          title: 'Link MDX',
+          placeholder: 'Path to .mdx file (relative to workspace)',
+          defaultValue: '',
+          onSubmit: (path: string) => {
+            const trimmed = path.trim();
+            if (trimmed) callback(trimmed);
+          },
+        });
+      };
+
+      const hasNativeDialog = !!window.electronAPI?.openFileDialog;
+      if (!hasNativeDialog) {
+        promptForPath();
+        return;
+      }
+
+      let filePath: string | null = null;
+      try {
+        filePath = await fs.openFileDialog({
+          filters: [
+            { name: 'MDX', extensions: ['mdx'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        });
+      } catch {
+        promptForPath();
+        return;
+      }
+
+      if (!filePath) return;
+
+      let relativePath = filePath;
+      if (workspacePath && filePath.startsWith(workspacePath)) {
+        relativePath = filePath.slice(workspacePath.length + 1);
+      } else if (workspacePath) {
+        showToast('Linked MDX is outside the workspace', 'warning');
+      }
+      callback(relativePath);
+    };
+
+    const handleCreateMdx = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const callback = detail?.callback as ((path: string) => void) | undefined;
+      if (!callback || !activeFile || !workspacePath) return;
+
+      const currentDir = activeFile.path.substring(0, activeFile.path.lastIndexOf('/'));
+
+      setInputDialogValue('untitled');
+      setInputDialog({
+        title: 'Create MDX',
+        placeholder: 'MDX file name',
+        defaultValue: 'untitled',
+        onSubmit: async (name: string) => {
+          if (!name.trim()) return;
+          const trimmed = name.trim();
+          const fileName = trimmed.toLowerCase().endsWith('.mdx') ? trimmed : `${trimmed}.mdx`;
+          const filePath = `${currentDir}/${fileName}`;
+
+          try {
+            await fs.createFile(filePath);
+            await fs.writeFile(filePath, '');
+            const relativePath = filePath.startsWith(workspacePath!)
+              ? filePath.slice(workspacePath!.length + 1)
+              : filePath;
+            callback(relativePath);
+          } catch (err) {
+            showToast('Failed to create MDX: ' + (err as Error).message, 'error');
+          }
+        },
+      });
+    };
+
+    const handleOpenEmbeddedMdx = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const src = detail?.src as string;
+      if (!src || !workspacePath) return;
+      const fullPath = src.startsWith('/') ? src : `${workspacePath}/${src}`;
+      const fileName = src.split('/').pop() || src;
+      openFile(fullPath, fileName);
+    };
+
     window.addEventListener('quipu:pick-database', handlePickDatabase);
     window.addEventListener('quipu:create-database', handleCreateDatabase);
     window.addEventListener('quipu:open-embedded-database', handleOpenEmbeddedDatabase);
+    window.addEventListener('quipu:pick-mdx', handlePickMdx);
+    window.addEventListener('quipu:create-mdx', handleCreateMdx);
+    window.addEventListener('quipu:open-embedded-mdx', handleOpenEmbeddedMdx);
     return () => {
       window.removeEventListener('quipu:pick-database', handlePickDatabase);
       window.removeEventListener('quipu:create-database', handleCreateDatabase);
       window.removeEventListener('quipu:open-embedded-database', handleOpenEmbeddedDatabase);
+      window.removeEventListener('quipu:pick-mdx', handlePickMdx);
+      window.removeEventListener('quipu:create-mdx', handleCreateMdx);
+      window.removeEventListener('quipu:open-embedded-mdx', handleOpenEmbeddedMdx);
     };
   }, [workspacePath, activeFile, openFile]);
 

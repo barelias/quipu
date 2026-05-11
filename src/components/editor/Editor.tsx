@@ -27,6 +27,7 @@ import { FindReplace } from './extensions/FindReplace';
 import { WikiLink, wikiLinksToHTML } from './extensions/WikiLink';
 import { CodeBlockWithLang } from './extensions/CodeBlockWithLang';
 import { EmbeddedDatabase } from './extensions/EmbeddedDatabase';
+import { EmbeddedMdx } from './extensions/EmbeddedMdx';
 import { LatexBlock } from './extensions/LatexBlock';
 import { SlashCommand } from './extensions/SlashCommand';
 import type { SlashCommandItem } from './extensions/SlashCommand';
@@ -515,6 +516,7 @@ const Editor: React.FC<EditorProps> = ({
                 transformCopiedText: true,
             }),
             EmbeddedDatabase,
+            EmbeddedMdx,
             LatexBlock,
             SlashCommand.configure({
                 suggestion: {

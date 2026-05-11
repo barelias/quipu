@@ -123,14 +123,46 @@ export const WikiLink = Node.create({
   },
 });
 
+function escapeAttr(value: string): string {
+  return value.replace(/"/g, '&quot;');
+}
+
 /**
- * Convert [[path|label]] in markdown text to HTML spans for TipTap parsing.
+ * Convert [[path|label]] and ![[path]] in markdown text to HTML for
+ * TipTap parsing.
+ *
+ *   ![[file.quipudb.jsonl]] -> embeddedDatabase node
+ *   ![[file.mdx]]           -> embeddedMdx node
+ *   ![[file.<other>]]       -> wikiLink (fallback, preserves the `!`)
+ *   [[file|label]]          -> wikiLink with label
+ *   [[file]]                -> wikiLink with file as both path and label
+ *
+ * Order matters: `![[..]]` is matched before `[[..]]` so the bang form
+ * never gets eaten by the plain wikilink rule.
  */
 export function wikiLinksToHTML(text: string): string {
-  return text.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+  // First pass: embeds (![[..]]). Dispatch by file extension so the
+  // markdown round-trip from save → load reconstitutes the right node.
+  let out = text.replace(/!\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+    const path = inner.trim();
+    const safe = escapeAttr(path);
+    if (/\.quipudb\.jsonl$/i.test(path)) {
+      return `<div data-type="embedded-database" data-src="${safe}"></div>`;
+    }
+    if (/\.mdx$/i.test(path)) {
+      return `<div data-type="embedded-mdx" data-src="${safe}"></div>`;
+    }
+    // Unknown extension — fall back to a plain wikilink without the bang.
+    return `<span data-wiki-link="${safe}" class="wiki-link">${path}</span>`;
+  });
+
+  // Second pass: plain wiki links ([[path|label]]).
+  out = out.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
     const pipeIdx = inner.indexOf('|');
     const path = pipeIdx >= 0 ? inner.substring(0, pipeIdx) : inner;
     const label = pipeIdx >= 0 ? inner.substring(pipeIdx + 1) : inner;
-    return `<span data-wiki-link="${path.replace(/"/g, '&quot;')}" class="wiki-link">${label}</span>`;
+    return `<span data-wiki-link="${escapeAttr(path)}" class="wiki-link">${label}</span>`;
   });
+
+  return out;
 }
