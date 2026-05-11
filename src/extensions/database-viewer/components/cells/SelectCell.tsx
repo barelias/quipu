@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { Popover } from 'radix-ui';
 import { cn } from '@/lib/utils';
+import { pillStyle } from '../../utils/colors';
 import type { SelectOption } from '../../types';
 
 interface SelectCellProps {
@@ -25,8 +26,8 @@ const SelectCell: React.FC<SelectCellProps> = ({ value, options, onUpdate }) => 
         <button className="w-full text-left min-h-[20px] flex items-center">
           {selectedOption ? (
             <span
-              className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white"
-              style={{ backgroundColor: selectedOption.color }}
+              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+              style={pillStyle(selectedOption.color)}
             >
               {selectedOption.value}
             </span>

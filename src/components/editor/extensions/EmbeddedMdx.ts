@@ -40,10 +40,13 @@ export const EmbeddedMdx = Node.create({
   },
 
   renderHTML({ HTMLAttributes }) {
+    // Atom node — must NOT include a content hole (`0`). The hole made
+    // ProseMirror's DOMSerializer throw the moment the user dragged or
+    // copied the node.
     return ['div', mergeAttributes(HTMLAttributes, {
       'data-type': 'embedded-mdx',
       'class': 'embedded-mdx-node',
-    }), 0];
+    })];
   },
 
   addStorage() {
@@ -64,6 +67,14 @@ export const EmbeddedMdx = Node.create({
       wrapper.className = 'embedded-mdx-wrapper';
       wrapper.setAttribute('data-type', 'embedded-mdx');
       wrapper.contentEditable = 'false';
+
+      // Swallow mousedown so ProseMirror doesn't surface its comment
+      // popup or selection toolbar when the user clicks inside the
+      // embed. Inner React click handlers still fire — stopPropagation
+      // only halts further bubbling above this wrapper.
+      wrapper.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+      });
 
       const src = node.attrs.src as string;
       const fileName = src?.split('/').pop() || 'document.mdx';
@@ -171,7 +182,12 @@ export const EmbeddedMdx = Node.create({
         });
         popup.appendChild(openItem);
 
-        menuContainer.appendChild(popup);
+        // Append to body so the wrapper's overflow:hidden doesn't clip
+        // the popup. Position from the button's screen rect.
+        document.body.appendChild(popup);
+        const rect = menuButton.getBoundingClientRect();
+        popup.style.top = `${rect.bottom + 4}px`;
+        popup.style.left = `${Math.max(8, rect.right - popup.offsetWidth)}px`;
         document.addEventListener('mousedown', handleOutsideClick);
       };
 

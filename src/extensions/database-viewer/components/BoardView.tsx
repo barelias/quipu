@@ -1,4 +1,5 @@
 import React, { useMemo, useCallback } from 'react';
+import { laneHeaderStyle } from '../utils/colors';
 import {
   DndContext,
   DragOverlay,
@@ -317,16 +318,15 @@ const BoardLane: React.FC<BoardLaneProps> = ({
       'flex flex-col w-64 shrink-0 bg-bg-base rounded-lg border overflow-hidden',
       isOver ? 'border-accent/60 bg-accent/5' : 'border-border/50',
     )}>
-      {/* Lane header */}
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 bg-bg-elevated border-b border-border/50">
+      {/* Lane header — Notion-style colored chip with count outside */}
+      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border/40">
         <span
-          className="w-2.5 h-2.5 rounded-full shrink-0"
-          style={{ backgroundColor: lane.color }}
-        />
-        <span className="text-sm font-medium text-text-primary truncate">
+          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium truncate"
+          style={laneHeaderStyle(lane.color)}
+        >
           {lane.label}
         </span>
-        <span className="text-xs text-text-tertiary ml-auto">
+        <span className="text-xs text-text-tertiary ml-auto tabular-nums">
           {lane.rows.length}
         </span>
       </div>

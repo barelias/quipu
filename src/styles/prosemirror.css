@@ -324,43 +324,40 @@ mark.comment:hover {
   outline: 1px solid rgba(255, 152, 0, 0.9);
 }
 
-/* --- Embedded Database --- */
+/* --- Embedded Database ---
 
-/* The embed lives inside the document column. Horizontal overflow scrolls
-   internally to the database container, never to the document. Replaces a
-   prior ResizeObserver-driven full-bleed hack — alignment now comes from
-   CSS alone, no per-frame JS. */
+   Naked layout: title reads as a heading, table flows into the document
+   below it. No card chrome, no border, no background — same posture as
+   the LaTeX block. The "..." menu still floats to the right of the
+   title. */
 .embedded-database-wrapper {
   display: block;
   width: 100%;
-  margin: 1rem 0;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
-  overflow: hidden;
+  margin: 1.25rem 0 0.75rem;
 }
 
 .embedded-database-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--color-bg-elevated);
-  border-bottom: 1px solid var(--color-border);
-  font-size: 0.875rem;
+  padding: 0 0 0.35rem 0;
+  font-size: 1rem;
 }
 
 .embedded-database-header-name {
-  font-weight: 500;
-  color: var(--color-text-secondary);
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: var(--color-page-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  letter-spacing: -0.01em;
 }
 
 .embedded-database-header-name:hover {
-  color: var(--color-text-primary);
+  color: var(--color-accent);
 }
 
 .embedded-database-header-menu {
@@ -386,16 +383,16 @@ mark.comment:hover {
 }
 
 .embedded-database-menu-popup {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 0.25rem;
+  /* Rendered into document.body so the wrapper's overflow:hidden (which
+     we need for the rounded corners) can't clip it. Position is set in
+     JS from the trigger button's getBoundingClientRect. */
+  position: fixed;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   min-width: 200px;
-  z-index: 30;
+  z-index: 9999;
   padding: 0.25rem;
 }
 
@@ -417,39 +414,36 @@ mark.comment:hover {
 }
 
 /* --- Embedded MDX ---
-   Same chrome as embedded database — different prefix so the two nodes
-   can be styled independently if they ever diverge. */
+   Naked layout matching the embedded-database treatment — title reads
+   as a heading, body flows into the document below. */
 .embedded-mdx-wrapper {
   display: block;
   width: 100%;
-  margin: 1rem 0;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
-  overflow: hidden;
+  margin: 1.25rem 0 0.75rem;
 }
 
 .embedded-mdx-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--color-bg-elevated);
-  border-bottom: 1px solid var(--color-border);
-  font-size: 0.875rem;
+  padding: 0 0 0.35rem 0;
+  font-size: 1rem;
 }
 
 .embedded-mdx-header-name {
-  font-weight: 500;
-  color: var(--color-text-secondary);
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: var(--color-page-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  letter-spacing: -0.01em;
 }
 
 .embedded-mdx-header-name:hover {
-  color: var(--color-text-primary);
+  color: var(--color-accent);
 }
 
 .embedded-mdx-header-menu {
@@ -475,16 +469,16 @@ mark.comment:hover {
 }
 
 .embedded-mdx-menu-popup {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 0.25rem;
+  /* Rendered into document.body so the wrapper's overflow:hidden (which
+     we need for the rounded corners) can't clip it. Position is set in
+     JS from the trigger button's getBoundingClientRect. */
+  position: fixed;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   min-width: 200px;
-  z-index: 30;
+  z-index: 9999;
   padding: 0.25rem;
 }
 

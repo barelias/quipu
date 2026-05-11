@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Popover } from 'radix-ui';
 import { CheckIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
+import { pillStyle } from '../../utils/colors';
 import type { SelectOption } from '../../types';
 
 interface MultiSelectCellProps {
@@ -31,8 +32,8 @@ const MultiSelectCell: React.FC<MultiSelectCellProps> = ({ value, options, onUpd
               return (
                 <span
                   key={val}
-                  className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white"
-                  style={{ backgroundColor: opt?.color ?? '#6b7280' }}
+                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                  style={pillStyle(opt?.color ?? '#6b7280')}
                 >
                   {val}
                 </span>

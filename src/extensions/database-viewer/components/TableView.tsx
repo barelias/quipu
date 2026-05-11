@@ -9,6 +9,7 @@ import { PlusIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useColumnDefs } from '../hooks/useColumnDefs';
 import { ColumnHeaderMenu } from './ColumnManager';
+import ColumnTypeIcon from './ColumnTypeIcon';
 import type { DatabaseSchema, DatabaseRow, ColumnDef, ColumnType } from '../types';
 
 interface TableViewProps {
@@ -120,12 +121,15 @@ const TableView: React.FC<TableViewProps> = ({
                   <th
                     key={header.id}
                     className={cn(
-                      'relative text-left px-3 py-1.5 text-page-text/50 font-medium text-xs tracking-wide',
+                      'relative text-left px-3 py-1.5 text-page-text/60 font-medium text-xs tracking-wide',
                       'border-b border-border/30 select-none',
                     )}
                     style={{ width: header.getSize() }}
                   >
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
+                      {!header.isPlaceholder && (
+                        <ColumnTypeIcon type={(header.column.columnDef.meta as { columnDef?: ColumnDef })?.columnDef?.type ?? 'text'} />
+                      )}
                       {header.isPlaceholder ? null : (
                         renameColumn && removeColumn && changeColumnType ? (
                           <ColumnHeaderMenu

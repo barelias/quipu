@@ -4,7 +4,6 @@ import { Table, SquaresFour } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useDatabase } from './hooks/useDatabase';
 import { useDatabaseFilters } from './hooks/useDatabaseFilters';
-import { useFileSystem } from '@/context/FileSystemContext';
 import TableView from './components/TableView';
 import BoardView from './components/BoardView';
 import FilterBar from './components/FilterBar';
@@ -34,6 +33,19 @@ export interface DatabaseViewerProps {
   databaseFilePath?: string | null;
 }
 
+/**
+ * Read the workspace path from the DOM marker the app root already sets.
+ * Lets the viewer work whether it's mounted inside the app's React tree
+ * (standalone tab — provider available) or inside a TipTap node-view
+ * React root (inline embed — no provider). Falls back to null if the
+ * marker isn't present.
+ */
+function getWorkspacePathFromDOM(): string | null {
+  if (typeof document === 'undefined') return null;
+  const el = document.querySelector('[data-workspace-path]') as HTMLElement | null;
+  return el?.dataset.workspacePath ?? null;
+}
+
 const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
   activeFile,
   onContentChange,
@@ -41,7 +53,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
   mode = 'standalone',
   databaseFilePath,
 }) => {
-  const { workspacePath } = useFileSystem();
+  const workspacePath = getWorkspacePathFromDOM();
   const content = directContent !== undefined ? directContent : (typeof activeFile?.content === 'string' ? activeFile.content : null);
   const resolvedDatabasePath = databaseFilePath ?? activeFile?.path ?? null;
   const [isAddColumnOpen, setIsAddColumnOpen] = useState(false);

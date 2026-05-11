@@ -41,10 +41,13 @@ export const EmbeddedDatabase = Node.create({
   },
 
   renderHTML({ HTMLAttributes }) {
+    // Atom node — must NOT include a content hole (`0`). The hole made
+    // ProseMirror's DOMSerializer throw "Content hole not allowed in a
+    // leaf node spec" the moment the user dragged or copied the node.
     return ['div', mergeAttributes(HTMLAttributes, {
       'data-type': 'embedded-database',
       'class': 'embedded-database-node',
-    }), 0];
+    })];
   },
 
   addStorage() {
@@ -65,6 +68,15 @@ export const EmbeddedDatabase = Node.create({
       wrapper.className = 'embedded-database-wrapper';
       wrapper.setAttribute('data-type', 'embedded-database');
       wrapper.contentEditable = 'false';
+
+      // Swallow mousedown so ProseMirror doesn't select the node or
+      // surface the comment popup when the user clicks anywhere inside
+      // the embed. React handlers on the inner buttons still fire
+      // because event.stopPropagation only stops further bubbling
+      // (handlers along the path up to here run normally).
+      wrapper.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+      });
 
       const src = node.attrs.src as string;
       const fileName = src?.split('/').pop() || 'database';
@@ -172,7 +184,12 @@ export const EmbeddedDatabase = Node.create({
         });
         popup.appendChild(openItem);
 
-        menuContainer.appendChild(popup);
+        // Append to body so the wrapper's overflow:hidden doesn't clip
+        // the popup. Position from the button's screen rect.
+        document.body.appendChild(popup);
+        const rect = menuButton.getBoundingClientRect();
+        popup.style.top = `${rect.bottom + 4}px`;
+        popup.style.left = `${Math.max(8, rect.right - popup.offsetWidth)}px`;
         document.addEventListener('mousedown', handleOutsideClick);
       };
 
