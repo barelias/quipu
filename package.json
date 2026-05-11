@@ -1,7 +1,7 @@
 {
   "name": "quipu_simple",
   "private": true,
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "A web-based code editor with rich text, terminal, and git support",
   "author": {
     "name": "barelias",
@@ -55,6 +55,7 @@
     "date-fns": "^4.1.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.35",
+    "@mdx-js/mdx": "^3.0.1",
     "js-yaml": "^4.1.1",
     "lowlight": "^3.3.0",
     "node-pty": "^1.1.0",
