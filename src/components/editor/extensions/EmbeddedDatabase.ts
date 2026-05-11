@@ -189,7 +189,14 @@ export const EmbeddedDatabase = Node.create({
         contentDOM: undefined,
         destroy() {
           closeMenu();
-          root?.unmount();
+          // Defer the unmount — TipTap fires this callback during
+          // React's commit phase. A synchronous root.unmount() trips
+          // React's "Attempted to synchronously unmount a root while
+          // React was already rendering" warning. The host element is
+          // gone by the time the microtask runs.
+          const r = root;
+          root = null;
+          if (r) queueMicrotask(() => { try { r.unmount(); } catch { /* */ } });
         },
       };
     };

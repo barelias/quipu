@@ -187,7 +187,16 @@ export const EmbeddedMdx = Node.create({
         contentDOM: undefined,
         destroy() {
           closeMenu();
-          root?.unmount();
+          // Defer the unmount — TipTap fires this callback during
+          // React's commit phase (parent unmounting), and a synchronous
+          // root.unmount() then trips:
+          //   "Attempted to synchronously unmount a root while React was
+          //    already rendering."
+          // The host element is removed by the time the microtask runs,
+          // so the root is already orphaned when we finally unmount.
+          const r = root;
+          root = null;
+          if (r) queueMicrotask(() => { try { r.unmount(); } catch { /* */ } });
         },
       };
     };

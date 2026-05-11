@@ -1,7 +1,7 @@
 ---
 title: "feat: Database polish, link columns, and chat MDX/quipudb rendering"
 type: feat
-status: active
+status: completed
 date: 2026-05-08
 origin: docs/brainstorms/2026-04-08-database-view-requirements.md
 ---
