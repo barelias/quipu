@@ -415,6 +415,12 @@ itself readable and lets the data file live alongside the conversation.
 line/bar/area per distinct \`series\` value. Omit \`series\` and pass an array
 of \`y\` column names instead when the data is already wide.
 
+**Column names must match the file exactly.** Read the first few lines of
+the file with the Read tool before writing the chart MDX so you know what
+the real column headers are. Guessing — \`x="index"\` when the CSV header
+is actually \`year\` — renders an empty chart with an error message but
+costs the user a round trip.
+
 Markdown inside MDX renders with Quipu's chat typography — paragraphs,
 headings, lists, blockquotes, inline code, links.
 

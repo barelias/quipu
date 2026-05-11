@@ -115,12 +115,35 @@ function useChartData(
     if (fromFile.loading || fromFile.error) {
       return { rows: [], seriesNames: [], loading: fromFile.loading, error: fromFile.error };
     }
+    if (rows.length === 0) {
+      return { rows: [], seriesNames: [], loading: false, error: 'No data rows. Check that the file has a header and at least one row.' };
+    }
+
+    const available = Object.keys(rows[0] as object);
+    const missing: string[] = [];
+    if (!available.includes(x)) missing.push(`x="${x}"`);
+    const yKeys = Array.isArray(y) ? y : [y];
+    if (!series) {
+      for (const k of yKeys) if (!available.includes(k)) missing.push(`y="${k}"`);
+    }
+    if (series && !available.includes(series)) missing.push(`series="${series}"`);
+    if (missing.length > 0) {
+      return {
+        rows: [],
+        seriesNames: [],
+        loading: false,
+        error: `Column${missing.length > 1 ? 's' : ''} not found: ${missing.join(', ')}. Available: ${available.join(', ')}`,
+      };
+    }
+
     if (series && typeof y === 'string') {
       const pivoted = pivotWide(rows, x, y, series);
+      if (pivoted.seriesNames.length === 0) {
+        return { rows: [], seriesNames: [], loading: false, error: `series="${series}" has no values in the data` };
+      }
       return { rows: pivoted.rows, seriesNames: pivoted.seriesNames, loading: false, error: null };
     }
-    const seriesNames = Array.isArray(y) ? y : [y];
-    return { rows, seriesNames, loading: false, error: null };
+    return { rows, seriesNames: yKeys, loading: false, error: null };
   }, [rows, x, y, series, fromFile.loading, fromFile.error]);
 }
 
@@ -218,8 +241,24 @@ export const AreaChart: React.FC<StackableProps> = ({ src, data, x, y, series, s
 export const PieChart: React.FC<PieProps> = ({ src, data, label, value, height, title }) => {
   const fromFile = useChartFile(src);
   const rows = data ?? fromFile.rows ?? [];
+
+  let error: string | null = fromFile.error;
+  if (!fromFile.loading && !error) {
+    if (rows.length === 0) {
+      error = 'No data rows. Check that the file has a header and at least one row.';
+    } else {
+      const available = Object.keys(rows[0] as object);
+      const missing: string[] = [];
+      if (!available.includes(label)) missing.push(`label="${label}"`);
+      if (!available.includes(value)) missing.push(`value="${value}"`);
+      if (missing.length > 0) {
+        error = `Column${missing.length > 1 ? 's' : ''} not found: ${missing.join(', ')}. Available: ${available.join(', ')}`;
+      }
+    }
+  }
+
   return (
-    <ChartShell title={title} height={height} loading={fromFile.loading} error={fromFile.error}>
+    <ChartShell title={title} height={height} loading={fromFile.loading} error={error}>
       <ResponsiveContainer width="100%" height="100%">
         <RPieChart>
           <Tooltip contentStyle={tooltipStyle} />
