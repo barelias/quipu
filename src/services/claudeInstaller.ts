@@ -339,6 +339,153 @@ fi
 exit 0
 `;
 
+// --- Quipu chat rendering skills ---
+//
+// These skills are documentation-only (no hooks). They teach the agent
+// how to emit the two fenced-block surfaces the chat upgrades into live
+// React renders:
+//
+//   ```mdx              -> curated MDX surface (Card, Callout, Badge, …)
+//   ```quipudb.jsonl    -> read-only DatabaseViewer
+//
+// Skill files are upserted on every workspace open — the same policy as
+// `frame.md`. A header comment notes that hand edits will be overwritten.
+
+const MDX_SKILL = `---
+name: mdx
+description: >
+  Render rich UI in the Quipu chat by emitting a fenced \`\`\`mdx code
+  block. The block is compiled through @mdx-js/mdx evaluate() and renders
+  inside a sandboxed component map. Use this for cards, callouts, badges,
+  stats, and side-by-side layouts — anything where markdown alone feels
+  flat. For tabular data prefer \`\`\`quipudb.jsonl instead.
+triggers:
+  - mdx
+  - rich rendering
+  - chat ui
+  - card
+  - callout
+---
+
+<!-- Auto-managed by Quipu. Edits will be overwritten on workspace open. -->
+
+# MDX rendering in the Quipu chat
+
+When you need richer UI than plain markdown provides, emit a fenced
+\`\`\`mdx block. The chat compiles it through @mdx-js/mdx and renders the
+result with a curated component palette.
+
+## Available components
+
+| Component | Purpose | Props |
+|-----------|---------|-------|
+| \`<Card>\` | Bordered container, optional title | \`title?: string\`, \`variant?: 'default' \\| 'subtle' \\| 'accent'\` |
+| \`<Callout>\` | Info / warn / error / success banner | \`type?: 'info' \\| 'warn' \\| 'error' \\| 'success'\`, \`title?\` |
+| \`<Badge>\` | Pill-shaped tag | \`color?: 'accent' \\| 'muted' \\| 'success' \\| 'warning' \\| 'error' \\| 'info'\` |
+| \`<Stat>\` | Big-number metric with optional label and hint | \`label?\`, \`value?\`, \`hint?\` |
+| \`<Row>\` / \`<Col>\` | Horizontal layout | \`<Row gap='sm' \\| 'md' \\| 'lg'>\`, \`<Col grow={1}>\` |
+
+Markdown inside MDX renders with Quipu's chat typography — paragraphs,
+headings, lists, blockquotes, inline code, links.
+
+## Sandbox rules
+
+- \`import\` and \`export\` statements are rejected.
+- \`dangerouslySetInnerHTML\`, \`__html\`, and \`<script>\` are rejected.
+- Anchor \`href\` values are scrubbed (no \`javascript:\` or \`data:\`).
+- Unknown components fall back to plain text — they cannot become
+  arbitrary DOM elements.
+
+## Example
+
+\`\`\`mdx
+<Callout type="success" title="Build passed">
+  All 142 tests green. Deploy is queued.
+</Callout>
+
+<Row>
+  <Col>
+    <Stat label="Coverage" value="87%" hint="+3% vs main" />
+  </Col>
+  <Col>
+    <Stat label="Bundle" value="412 KB" hint="-18 KB" />
+  </Col>
+</Row>
+
+<Card title="Next steps">
+  - Watch the canary metrics for 30 minutes
+  - Roll forward once latency stays under 200ms
+</Card>
+\`\`\`
+
+## When to use this
+
+- Comparison layouts (two stats side by side)
+- Status responses (pass/fail with detail)
+- Anything that benefits from visual chrome — but only when it adds
+  signal over plain markdown.
+
+For raw tabular data, prefer the \`quipudb\` skill — markdown tables and
+ASCII art are illegible past three columns.
+`;
+
+const QUIPUDB_SKILL = `---
+name: quipudb
+description: >
+  Render typed tabular data in the Quipu chat by emitting a fenced
+  \`\`\`quipudb.jsonl code block. The chat upgrades it into a read-only
+  DatabaseViewer styled to match the editor. Prefer this over markdown
+  tables for any data that has more than three columns, mixes types, or
+  benefits from typed cell rendering (badges, dates, checkboxes, links).
+triggers:
+  - quipudb
+  - database render
+  - tabular data
+  - typed table
+---
+
+<!-- Auto-managed by Quipu. Edits will be overwritten on workspace open. -->
+
+# quipudb.jsonl rendering in the Quipu chat
+
+When the answer is structured data, emit a fenced \`\`\`quipudb.jsonl\`
+block. The chat upgrades it into a Quipu DatabaseViewer (read-only). The
+viewer types each column, shows colored badges for selects, formats
+dates, and supports horizontal scroll — features markdown tables can't.
+
+## Format
+
+Line 1 is the schema. Subsequent lines are one row per JSON object with a
+unique \`_id\`.
+
+\`\`\`quipudb.jsonl
+{"_schema":{"version":1,"name":"Open issues","columns":[{"id":"title","name":"Title","type":"text"},{"id":"priority","name":"Priority","type":"select","options":[{"value":"P0","color":"#f43f5e"},{"value":"P1","color":"#f97316"},{"value":"P2","color":"#eab308"}]},{"id":"due","name":"Due","type":"date"},{"id":"done","name":"Done","type":"checkbox"}],"views":[{"id":"v1","name":"Table","type":"table","filters":[],"sorts":[],"columnWidths":{}}]}}
+{"_id":"r1","title":"Restore CI parity","priority":"P0","due":"2026-05-12","done":false}
+{"_id":"r2","title":"Migrate auth middleware","priority":"P1","due":"2026-05-20","done":false}
+{"_id":"r3","title":"Audit error toasts","priority":"P2","due":"2026-05-25","done":true}
+\`\`\`
+
+## Column types
+
+| type | Cell value | Notes |
+|------|-----------|-------|
+| \`text\` | string | Free-form |
+| \`number\` | number | Right-aligned |
+| \`select\` | string | One of \`options[].value\` — rendered as colored badge |
+| \`multi-select\` | string[] | Multiple option values |
+| \`date\` | ISO date string | e.g. \`"2026-05-12"\` |
+| \`checkbox\` | boolean | \`true\` / \`false\` |
+| \`link\` | string | Path; needs schema \`mode\` (\`'global'\` or \`'relative'\`) and optional \`defaultExtension\` |
+
+## When to use this
+
+- More than three columns
+- Mixed value types (dates, booleans, badges)
+- Any "show me the list of …" response that should remain explorable
+
+For plain prose with light decoration, prefer the \`mdx\` skill.
+`;
+
 // Hook configuration to merge into settings.json
 interface FrameHookEntry {
   type: string;
@@ -385,9 +532,13 @@ async function installFrameSkills(workspacePath: string): Promise<void> {
   await fs.createFolder(commandsDir);
   await fs.createFolder(scriptsDir);
 
-  // Write template files (skip if already exist)
+  // Write template files. Skills are always overwritten so app upgrades
+  // ship updates without per-workspace migration. Hand edits to these
+  // files will be lost — the header comments in each template note this.
   const files = [
     { path: skillsDir + '/frame.md', content: FRAME_SKILL },
+    { path: skillsDir + '/mdx.md', content: MDX_SKILL },
+    { path: skillsDir + '/quipudb.md', content: QUIPUDB_SKILL },
     { path: commandsDir + '/frame.md', content: FRAME_COMMAND },
     { path: scriptsDir + '/load-frame.sh', content: LOAD_FRAME_SCRIPT },
   ];

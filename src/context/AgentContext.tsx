@@ -298,6 +298,16 @@ function buildQuipuContextPrompt(
   lines.push('');
   lines.push(`When editing \`.md\` or \`.quipu\` files, you can insert a dedicated LaTeX block node by wrapping the expression in \`$$...$$\` on its own line — Quipu's editor will render it as a KaTeX block. Use proper LaTeX syntax; KaTeX supports the common subset (no \\\\newcommand, etc.).`);
 
+  lines.push('');
+  lines.push(`## Rich rendering`);
+  lines.push('');
+  lines.push(`The chat upgrades two fenced-block languages into live React renders:`);
+  lines.push('');
+  lines.push(`- \`\`\`mdx — curated MDX surface. Components available: \`Card\`, \`Callout\`, \`Badge\`, \`Stat\`, \`Row\`, \`Col\`. No \`import\`, no \`export\`, no \`dangerouslySetInnerHTML\`, no \`<script>\`. Use for rich UI in chat — cards, callouts, side-by-side stats. See the \`mdx\` skill (\`/mdx\`) for the full reference.`);
+  lines.push(`- \`\`\`quipudb.jsonl — read-only DatabaseViewer. Line 1 is the schema, subsequent lines are JSON rows with a unique \`_id\`. Column types: \`text\`, \`number\`, \`select\`, \`multi-select\`, \`date\`, \`checkbox\`, \`link\`. See the \`quipudb\` skill (\`/quipudb\`) for the format reference.`);
+  lines.push('');
+  lines.push(`**Prefer \`\`\`quipudb.jsonl over markdown tables for any tabular data with more than three columns or typed values** — it stays explorable past the point where markdown tables become illegible. Prefer \`\`\`mdx over plain markdown when the response benefits from visual chrome (status callouts, side-by-side comparisons). Don't reach for either when plain markdown communicates the same signal — the simpler tool is the right tool.`);
+
   return lines.join('\n');
 }
 
