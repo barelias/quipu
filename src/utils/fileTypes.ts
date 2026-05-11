@@ -62,6 +62,10 @@ export function isQuipuDbFile(fileName: string): boolean {
   return fileName.endsWith('.quipudb.jsonl');
 }
 
+export function isMdxFile(fileName: string): boolean {
+  return getFileExtension(fileName) === '.mdx';
+}
+
 export interface ViewerTab {
   name: string;
   isDiff?: boolean;

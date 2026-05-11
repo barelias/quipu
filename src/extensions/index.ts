@@ -16,6 +16,8 @@ import './repo-editor/index';
 
 // database-viewer stays in core permanently (see plugin architecture plan §Key Decisions).
 import databaseViewer from './database-viewer';
+// mdx-viewer stays in core — MDX is fundamental to Quipu's rich-rendering story.
+import mdxViewer from './mdx-viewer';
 
-const viewers: ExtensionDescriptor[] = [databaseViewer];
+const viewers: ExtensionDescriptor[] = [databaseViewer, mdxViewer];
 viewers.forEach(registerExtension);
