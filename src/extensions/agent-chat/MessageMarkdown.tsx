@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import katex from 'katex';
+import { upgradeCustomCodeBlocks, unmountCustomCodeBlocks } from './CustomCodeBlocks';
 
 marked.setOptions({
   gfm: true,
@@ -14,6 +15,8 @@ interface MessageMarkdownProps {
 }
 
 export default function MessageMarkdown({ body }: MessageMarkdownProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   const html = useMemo(() => {
     const raw = marked.parse(body ?? '', { async: false }) as string;
     return DOMPurify.sanitize(raw, {
@@ -23,10 +26,22 @@ export default function MessageMarkdown({ body }: MessageMarkdownProps) {
     });
   }, [body]);
 
-  const ref = (el: HTMLDivElement | null) => {
+  useEffect(() => {
+    const el = containerRef.current;
     if (!el) return;
 
-    // Syntax-highlight fenced code blocks.
+    // Drop any prior React roots before replacing innerHTML — otherwise
+    // their host elements get GC'd while React still thinks they're live.
+    unmountCustomCodeBlocks(el);
+
+    el.innerHTML = html;
+
+    // 1) Upgrade fenced mdx / quipudb blocks into React renders. MUST run
+    //    before highlight.js so hljs doesn't mutate the <code> className
+    //    or insert highlighted spans we'd then have to undo.
+    upgradeCustomCodeBlocks(el);
+
+    // 2) Highlight remaining code blocks.
     const blocks = el.querySelectorAll<HTMLElement>('pre code');
     blocks.forEach((block) => {
       if (block.dataset.highlighted === 'true') return;
@@ -38,12 +53,15 @@ export default function MessageMarkdown({ body }: MessageMarkdownProps) {
       }
     });
 
-    // Render LaTeX math. Walk the text nodes to find $$...$$ and $...$
-    // sequences (skipping code blocks so math-looking shell args aren't eaten).
+    // 3) Render LaTeX math in text nodes.
     renderMathInNode(el);
-  };
 
-  return <div ref={ref} className="agent-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+    return () => {
+      unmountCustomCodeBlocks(el);
+    };
+  }, [html]);
+
+  return <div ref={containerRef} className="agent-markdown" />;
 }
 
 const MATH_MARKER = 'data-math-rendered';
