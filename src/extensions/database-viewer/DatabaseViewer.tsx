@@ -18,7 +18,13 @@ export interface DatabaseViewerProps {
   content?: string | null;
   onContentChange?: (content: string) => void;
   isActive?: boolean;
-  mode?: 'standalone' | 'inline';
+  /**
+   * - `standalone`: full editor surface (title, toolbar, view switcher).
+   * - `inline`: embedded inside a markdown document.
+   * - `chat`: read-only card for the agent-chat surface — no header, no
+   *   toolbar, no cell editing, max-height with internal scroll.
+   */
+  mode?: 'standalone' | 'inline' | 'chat';
   /**
    * Full path to the .quipudb.jsonl file backing this view. Required for
    * link columns (relative-mode resolution + create-new-file). Optional in
@@ -98,10 +104,14 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
     addColumn(colDef);
   }, [addColumn]);
 
+  const isChat = mode === 'chat';
+
   return (
     <div className={cn(
       'flex flex-col bg-page-bg overflow-hidden',
-      mode === 'standalone' ? 'flex-1' : 'max-h-[400px]',
+      mode === 'standalone' && 'flex-1',
+      mode === 'inline' && 'max-h-[400px]',
+      isChat && 'max-h-[360px] rounded-md border border-border bg-bg-surface',
     )}>
       {/* Header — standalone only */}
       {mode === 'standalone' && (
@@ -117,7 +127,8 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
         </div>
       )}
 
-      {/* Toolbar */}
+      {/* Toolbar — hidden in chat mode (read-only) */}
+      {!isChat && (
       <div
         className="shrink-0 flex items-center gap-2 py-1.5 border-b border-border/30"
         style={{ paddingInline: 'var(--db-h-pad)' }}
@@ -155,6 +166,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
           </Tabs.Root>
         </div>
       </div>
+      )}
 
       {/* View content — full width */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
@@ -174,13 +186,14 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
             rows={filteredRows}
             updateCell={updateCell}
             addRow={addRow}
-            deleteRow={deleteRow}
-            renameColumn={renameColumn}
-            removeColumn={removeColumn}
-            changeColumnType={changeColumnType}
-            onAddColumn={() => setIsAddColumnOpen(true)}
+            deleteRow={isChat ? undefined : deleteRow}
+            renameColumn={isChat ? undefined : renameColumn}
+            removeColumn={isChat ? undefined : removeColumn}
+            changeColumnType={isChat ? undefined : changeColumnType}
+            onAddColumn={isChat ? undefined : () => setIsAddColumnOpen(true)}
             databaseFilePath={resolvedDatabasePath}
             workspacePath={workspacePath}
+            readOnly={isChat}
           />
         )}
       </div>

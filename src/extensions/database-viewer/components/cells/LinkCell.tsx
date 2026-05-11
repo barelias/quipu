@@ -14,6 +14,11 @@ interface LinkCellProps {
   databaseFilePath: string | null;
   workspacePath: string | null;
   onUpdate: (value: string | null) => void;
+  /**
+   * When true, hide the "+ Pick / create" affordance for empty cells.
+   * Existing links still open on click — read-only doesn't mean inert.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -68,7 +73,7 @@ export function resolveLinkPath(
   return `${workspacePath}/${value}`;
 }
 
-const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, workspacePath, onUpdate }) => {
+const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, workspacePath, onUpdate, readOnly = false }) => {
   const { openFile } = useTab();
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [siblingFiles, setSiblingFiles] = useState<string[]>([]);
@@ -210,6 +215,11 @@ const LinkCell: React.FC<LinkCellProps> = ({ value, column, databaseFilePath, wo
         <span className="truncate">{display}</span>
       </button>
     );
+  }
+
+  // --- Read-only empty cell: just an em-dash placeholder, no picker.
+  if (readOnly) {
+    return <span className="text-text-tertiary text-xs">—</span>;
   }
 
   // --- Display: empty cell with picker affordance ---

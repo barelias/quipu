@@ -23,6 +23,7 @@ interface TableMeta {
   updateCell: (rowId: string, columnId: string, value: unknown) => void;
   databaseFilePath: string | null;
   workspacePath: string | null;
+  readOnly?: boolean;
 }
 
 /**
@@ -32,7 +33,11 @@ function renderCell(info: CellContext<DatabaseRow, unknown>, col: ColumnDef): Re
   const value = info.getValue();
   const rowId = info.row.original._id;
   const meta = info.table.options.meta as TableMeta | undefined;
-  const update = (v: unknown) => meta?.updateCell(rowId, col.id, v);
+  const readOnly = meta?.readOnly ?? false;
+  const update = (v: unknown) => {
+    if (readOnly) return; // chat / preview surfaces don't persist edits
+    meta?.updateCell(rowId, col.id, v);
+  };
 
   switch (col.type) {
     case 'text':
@@ -74,6 +79,7 @@ function renderCell(info: CellContext<DatabaseRow, unknown>, col: ColumnDef): Re
         databaseFilePath: meta?.databaseFilePath ?? null,
         workspacePath: meta?.workspacePath ?? null,
         onUpdate: (v: string | null) => update(v),
+        readOnly,
       });
     default:
       return String(value ?? '');

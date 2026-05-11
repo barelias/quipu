@@ -25,6 +25,12 @@ interface TableViewProps {
   // global paths. Optional so non-link tables work without plumbing.
   databaseFilePath?: string | null;
   workspacePath?: string | null;
+  /**
+   * When true, cells render display-only — no inline editors, no
+   * checkbox toggles, no "+ Pick" affordance. The "+ New row" footer is
+   * also hidden. Used by the chat block.
+   */
+  readOnly?: boolean;
 }
 
 const ROW_HEIGHT = 36;
@@ -41,6 +47,7 @@ const TableView: React.FC<TableViewProps> = ({
   onAddColumn,
   databaseFilePath = null,
   workspacePath = null,
+  readOnly = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const columns = useColumnDefs(schema);
@@ -57,6 +64,7 @@ const TableView: React.FC<TableViewProps> = ({
       updateCell,
       databaseFilePath,
       workspacePath,
+      readOnly,
     },
   });
 
@@ -210,16 +218,18 @@ const TableView: React.FC<TableViewProps> = ({
           </tbody>
         </table>
 
-        {/* Add row button */}
-        <button
-          onClick={handleAddRow}
-          className={cn(
-            'w-full text-left px-3 py-2 text-sm text-page-text/30',
-            'hover:bg-page-text/[0.03] hover:text-page-text/60 transition-colors',
-          )}
-        >
-          + New row
-        </button>
+        {/* Add row button — hidden in read-only mode */}
+        {!readOnly && (
+          <button
+            onClick={handleAddRow}
+            className={cn(
+              'w-full text-left px-3 py-2 text-sm text-page-text/30',
+              'hover:bg-page-text/[0.03] hover:text-page-text/60 transition-colors',
+            )}
+          >
+            + New row
+          </button>
+        )}
       </div>
 
       {/* Status bar */}
