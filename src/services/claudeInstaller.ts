@@ -463,6 +463,34 @@ headings, lists, blockquotes, inline code, links.
 
 For raw tabular data, prefer the \`quipudb\` skill — markdown tables and
 ASCII art are illegible past three columns.
+
+## Working with .mdx files in the workspace
+
+The same MDX surface is available as a first-class file type. Files
+ending in \`.mdx\` open in a split-pane viewer (source on the left, live
+preview on the right). The component palette and security posture match
+the chat block exactly.
+
+When the user asks for a durable artifact — a dashboard, a runbook, a
+status report they'll come back to — write the content to a \`.mdx\` file
+with the Write tool instead of (or alongside) emitting a \`\`\`mdx fenced
+block in chat. Charts in standalone \`.mdx\` files auto-refresh when the
+referenced \`.csv\` / \`.tsv\` / \`.json\` / \`.jsonl\` / \`.quipudb.jsonl\` is
+edited on disk — the workspace's file watcher dispatches a
+\`quipu:file-changed\` window event the preview pane listens for.
+
+Markdown notes can embed \`.mdx\` files inline:
+
+\`\`\`
+Some prose…
+
+![[notes/q2-status.mdx]]
+
+More prose…
+\`\`\`
+
+The editor renders the embed as a live preview card; clicking the
+header opens the \`.mdx\` standalone for editing.
 `;
 
 const QUIPUDB_SKILL = `---

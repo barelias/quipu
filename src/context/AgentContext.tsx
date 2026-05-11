@@ -308,6 +308,9 @@ function buildQuipuContextPrompt(
   lines.push('');
   lines.push(`**Prefer \`\`\`quipudb.jsonl over markdown tables for any tabular data with more than three columns or typed values** — it stays explorable past the point where markdown tables become illegible. Prefer \`\`\`mdx over plain markdown when the response benefits from visual chrome (status callouts, side-by-side comparisons). Don't reach for either when plain markdown communicates the same signal — the simpler tool is the right tool.`);
 
+  lines.push('');
+  lines.push(`\`.mdx\` is also a workspace file type. When the user wants a durable artifact (dashboard, runbook, status report) rather than a chat-scoped response, write the MDX to a \`.mdx\` file — opens in a split source/preview editor, charts with \`src="path"\` props auto-refresh from the underlying CSV / JSONL / quipudb.jsonl, and \`.md\` notes can inline-embed it via \`![[notes.mdx]]\`.`);
+
   return lines.join('\n');
 }
 

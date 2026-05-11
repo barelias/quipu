@@ -1,7 +1,7 @@
 ---
 title: "feat: MDX as a first-class file type in Quipu"
 type: feat
-status: active
+status: completed
 date: 2026-05-11
 ---
 
