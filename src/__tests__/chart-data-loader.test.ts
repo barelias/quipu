@@ -8,7 +8,7 @@ vi.mock('@/services/fileSystem', () => ({
   default: { readFile: vi.fn() },
 }));
 
-import { parseChartFile, pivotWide, resolveChartSrc } from '@/extensions/agent-chat/mdx-components/charts/dataLoader';
+import { parseChartFile, pivotWide, resolveChartSrc } from '@/extensions/mdx-runtime/charts/dataLoader';
 
 describe('parseChartFile (Unit 12 — charts)', () => {
   it('parses CSV with header row + numeric coercion via papaparse', async () => {

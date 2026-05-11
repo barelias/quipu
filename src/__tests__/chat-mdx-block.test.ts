@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateMdxSource } from '@/extensions/agent-chat/mdx-components';
+import { validateMdxSource } from '@/extensions/mdx-runtime';
 
 describe('validateMdxSource — chat MDX sandbox (Unit 10)', () => {
   it('accepts ordinary mdx with curated components', () => {
