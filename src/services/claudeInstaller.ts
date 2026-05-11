@@ -384,6 +384,36 @@ result with a curated component palette.
 | \`<Badge>\` | Pill-shaped tag | \`color?: 'accent' \\| 'muted' \\| 'success' \\| 'warning' \\| 'error' \\| 'info'\` |
 | \`<Stat>\` | Big-number metric with optional label and hint | \`label?\`, \`value?\`, \`hint?\` |
 | \`<Row>\` / \`<Col>\` | Horizontal layout | \`<Row gap='sm' \\| 'md' \\| 'lg'>\`, \`<Col grow={1}>\` |
+| \`<LineChart>\` | Line chart (one line per series) | \`x\`, \`y: string \\| string[]\`, optional \`series\` for long data |
+| \`<BarChart>\` | Bar chart, optionally stacked | \`x\`, \`y\`, optional \`series\`, \`stacked\` |
+| \`<AreaChart>\` | Area chart, optionally stacked | \`x\`, \`y\`, optional \`series\`, \`stacked\` |
+| \`<PieChart>\` | Pie chart | \`label\` (category column), \`value\` (numeric column) |
+
+## Charts
+
+Charts accept either inline \`data={[...]}\` or a workspace \`src=\` path.
+Supported formats: \`.csv\`, \`.tsv\`, \`.json\` (array of objects), \`.jsonl\`,
+\`.quipudb.jsonl\`. Prefer \`src\` for anything past ~20 rows — keeps the MDX
+itself readable and lets the data file live alongside the conversation.
+
+\`\`\`mdx
+<LineChart src="data/experiments.csv" x="date" y="accuracy" series="model" title="Accuracy over time" />
+
+<BarChart
+  src="experiments.quipudb.jsonl"
+  x="Model"
+  y="Accuracy"
+  series="Status"
+  stacked
+  title="Accuracy by model and status"
+/>
+
+<PieChart src="data/spend.csv" label="category" value="amount" title="Q1 spend by category" />
+\`\`\`
+
+\`series\` pivots long data into wide shape — one row per \`x\` value, one
+line/bar/area per distinct \`series\` value. Omit \`series\` and pass an array
+of \`y\` column names instead when the data is already wide.
 
 Markdown inside MDX renders with Quipu's chat typography — paragraphs,
 headings, lists, blockquotes, inline code, links.

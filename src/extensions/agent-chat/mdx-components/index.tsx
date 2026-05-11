@@ -4,6 +4,7 @@ import Callout from './Callout';
 import Badge from './Badge';
 import Stat from './Stat';
 import { Row, Col } from './Row';
+import { LineChart, BarChart, AreaChart, PieChart } from './charts/Charts';
 
 /**
  * Strip dangerous schemes from anchor hrefs and force safe link semantics.
@@ -41,6 +42,13 @@ export const MDX_COMPONENTS = {
   Stat,
   Row,
   Col,
+
+  // Charts (Recharts under the hood). Accept either inline `data` or a
+  // workspace `src` (.csv / .tsv / .json / .jsonl / .quipudb.jsonl).
+  LineChart,
+  BarChart,
+  AreaChart,
+  PieChart,
 
   // Mapped HTML elements — explicit so MDX cannot smuggle attributes
   // like `dangerouslySetInnerHTML`. Each receives a typed prop list.

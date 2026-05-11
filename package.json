@@ -1,7 +1,7 @@
 {
   "name": "quipu_simple",
   "private": true,
-  "version": "0.37.1",
+  "version": "0.38.0",
   "description": "A web-based code editor with rich text, terminal, and git support",
   "author": {
     "name": "barelias",
@@ -56,6 +56,8 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.16.35",
     "@mdx-js/mdx": "^3.0.1",
+    "papaparse": "^5.4.1",
+    "recharts": "^2.15.0",
     "js-yaml": "^4.1.1",
     "lowlight": "^3.3.0",
     "node-pty": "^1.1.0",
@@ -78,6 +80,7 @@
     "@excalidraw/excalidraw": "^0.18.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/dompurify": "^3.0.5",
+    "@types/papaparse": "^5.3.15",
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
