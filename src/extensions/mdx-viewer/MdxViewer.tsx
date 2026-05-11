@@ -1,5 +1,9 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
 import type { Tab as TabType, ActiveFile } from '@/types/tab';
+import SourcePane from './SourcePane';
+import PreviewPane from './PreviewPane';
+import MdxToolbar, { type MdxViewMode } from './Toolbar';
 
 export interface MdxViewerProps {
   tab?: TabType;
@@ -10,27 +14,79 @@ export interface MdxViewerProps {
 }
 
 /**
- * Placeholder MdxViewer for Unit 2 — registration only. Unit 3 replaces
- * this with the real split-pane source/preview viewer. Keeping the shell
- * tiny here lets us verify the extension registry plumbs .mdx tabs to
- * this component before touching the heavier UI.
+ * Split-pane viewer for .mdx files.
+ *
+ * Layout:
+ *   ┌─ Toolbar: filename + mode toggle (source / split / preview) ──┐
+ *   ├─ Source pane (textarea)  │  Preview pane (compiled MDX) ──────┤
+ *   └───────────────────────────────────────────────────────────────┘
+ *
+ * The source is the canonical input — every keystroke fires
+ * onContentChange so the tab's dirty / save flow stays in sync. The
+ * preview compiles the live source through `compileMdxSource` (debounce
+ * lives inside PreviewPane). Errors render inline in the preview pane
+ * via the shared MdxErrorPre so the source pane never disappears.
  */
-const MdxViewer: React.FC<MdxViewerProps> = ({ activeFile, content: directContent }) => {
-  const content =
+const MdxViewer: React.FC<MdxViewerProps> = ({
+  activeFile,
+  onContentChange,
+  content: directContent,
+}) => {
+  const initial =
     directContent !== undefined
-      ? directContent
+      ? (directContent ?? '')
       : typeof activeFile?.content === 'string'
         ? activeFile.content
         : '';
 
+  const [source, setSource] = useState<string>(initial);
+  const [mode, setMode] = useState<MdxViewMode>('split');
+  const isInitializedRef = useRef(false);
+
+  // Pull in external content updates (file watcher / undo / etc) without
+  // firing onContentChange ourselves — same pattern as the database
+  // viewer's content sync. Only re-seed if the incoming value differs.
+  useEffect(() => {
+    if (!isInitializedRef.current) {
+      isInitializedRef.current = true;
+      return;
+    }
+    if (initial !== source) {
+      setSource(initial);
+    }
+  }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSourceChange = useCallback(
+    (next: string) => {
+      setSource(next);
+      onContentChange?.(next);
+    },
+    [onContentChange],
+  );
+
+  const fileName = activeFile?.name ?? 'Untitled.mdx';
+  const isDirty = source !== initial;
+
   return (
     <div className="flex-1 flex flex-col bg-page-bg overflow-hidden">
-      <div className="shrink-0 pt-10 pb-2" style={{ paddingInline: 'var(--db-h-pad)' }}>
-        <h1 className="text-2xl font-bold text-page-text mb-1">{activeFile?.name ?? 'Untitled.mdx'}</h1>
-        <div className="text-xs text-page-text/50">MDX viewer placeholder — Unit 3 replaces this surface.</div>
-      </div>
-      <div className="flex-1 overflow-auto" style={{ paddingInline: 'var(--db-h-pad)' }}>
-        <pre className="text-sm text-page-text font-mono whitespace-pre-wrap py-2">{content ?? ''}</pre>
+      <MdxToolbar fileName={fileName} isDirty={isDirty} mode={mode} onModeChange={setMode} />
+
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {(mode === 'source' || mode === 'split') && (
+          <div
+            className={cn(
+              'min-h-0 overflow-hidden flex',
+              mode === 'split' ? 'flex-1 border-r border-border/30' : 'flex-1',
+            )}
+          >
+            <SourcePane value={source} onChange={handleSourceChange} />
+          </div>
+        )}
+        {(mode === 'preview' || mode === 'split') && (
+          <div className="flex-1 min-h-0 overflow-hidden bg-bg-base">
+            <PreviewPane source={source} />
+          </div>
+        )}
       </div>
     </div>
   );
