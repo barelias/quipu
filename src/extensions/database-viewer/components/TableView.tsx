@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 import { useColumnDefs } from '../hooks/useColumnDefs';
 import { ColumnHeaderMenu } from './ColumnManager';
 import ColumnTypeIcon from './ColumnTypeIcon';
-import type { DatabaseSchema, DatabaseRow, ColumnDef, ColumnType } from '../types';
+import type { DatabaseSchema, DatabaseRow, ColumnDef, ColumnType, SelectOption } from '../types';
 
 interface TableViewProps {
   schema: DatabaseSchema;
@@ -21,6 +21,8 @@ interface TableViewProps {
   renameColumn?: (columnId: string, newName: string) => void;
   removeColumn?: (columnId: string) => void;
   changeColumnType?: (columnId: string, newType: ColumnType) => void;
+  /** Append a new option to a select / multi-select column on the fly. */
+  updateColumnOptions?: (columnId: string, options: SelectOption[]) => void;
   onAddColumn?: () => void;
   // Required for link cells to resolve sibling folders + workspace-relative
   // global paths. Optional so non-link tables work without plumbing.
@@ -48,6 +50,7 @@ const TableView: React.FC<TableViewProps> = ({
   renameColumn,
   removeColumn,
   changeColumnType,
+  updateColumnOptions,
   onAddColumn,
   databaseFilePath = null,
   workspacePath = null,
@@ -67,6 +70,7 @@ const TableView: React.FC<TableViewProps> = ({
     getRowId: (row) => row._id,
     meta: {
       updateCell,
+      updateColumnOptions,
       databaseFilePath,
       workspacePath,
       readOnly,

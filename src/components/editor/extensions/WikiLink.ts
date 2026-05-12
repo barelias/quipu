@@ -131,38 +131,39 @@ function escapeAttr(value: string): string {
  * Convert [[path|label]] and ![[path]] in markdown text to HTML for
  * TipTap parsing.
  *
- *   ![[file.quipudb.jsonl]] -> embeddedDatabase node
+ *   [[file.quipudb.jsonl]]  -> embeddedDatabase node
+ *   [[file.mdx]]            -> embeddedMdx node
+ *   ![[file.quipudb.jsonl]] -> embeddedDatabase node (same; bang is just
+ *                              the explicit "embed me" syntax)
  *   ![[file.mdx]]           -> embeddedMdx node
- *   ![[file.<other>]]       -> wikiLink (fallback, preserves the `!`)
- *   [[file|label]]          -> wikiLink with label
- *   [[file]]                -> wikiLink with file as both path and label
+ *   [[file|label]]          -> wikiLink with label (for non-embeddable
+ *                              file types only)
+ *   [[file]]                -> wikiLink with file as path + label
  *
- * Order matters: `![[..]]` is matched before `[[..]]` so the bang form
- * never gets eaten by the plain wikilink rule.
+ * Both `![[..]]` and `[[..]]` route to embed nodes when the target ends
+ * in `.quipudb.jsonl` or `.mdx`. A plain text reference to a database
+ * was strictly less useful than the embed (you can always click the
+ * embed header to open the file standalone), so we treat all wikilinks
+ * to those file types as embeds — the bang prefix is preserved purely
+ * for back-compat with serialized markdown.
  */
 export function wikiLinksToHTML(text: string): string {
-  // First pass: embeds (![[..]]). Dispatch by file extension so the
-  // markdown round-trip from save → load reconstitutes the right node.
-  let out = text.replace(/!\[\[([^\]]+)\]\]/g, (_, inner: string) => {
-    const path = inner.trim();
+  return text.replace(/!?\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+    // The |label form is only meaningful for non-embed wikilinks. For
+    // embeds we ignore it because the embed renders the file's own
+    // content as the visible surface.
+    const pipeIdx = inner.indexOf('|');
+    const rawPath = pipeIdx >= 0 ? inner.substring(0, pipeIdx) : inner;
+    const label = pipeIdx >= 0 ? inner.substring(pipeIdx + 1) : inner;
+    const path = rawPath.trim();
     const safe = escapeAttr(path);
+
     if (/\.quipudb\.jsonl$/i.test(path)) {
       return `<div data-type="embedded-database" data-src="${safe}"></div>`;
     }
     if (/\.mdx$/i.test(path)) {
       return `<div data-type="embedded-mdx" data-src="${safe}"></div>`;
     }
-    // Unknown extension — fall back to a plain wikilink without the bang.
-    return `<span data-wiki-link="${safe}" class="wiki-link">${path}</span>`;
+    return `<span data-wiki-link="${safe}" class="wiki-link">${label}</span>`;
   });
-
-  // Second pass: plain wiki links ([[path|label]]).
-  out = out.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
-    const pipeIdx = inner.indexOf('|');
-    const path = pipeIdx >= 0 ? inner.substring(0, pipeIdx) : inner;
-    const label = pipeIdx >= 0 ? inner.substring(pipeIdx + 1) : inner;
-    return `<span data-wiki-link="${escapeAttr(path)}" class="wiki-link">${label}</span>`;
-  });
-
-  return out;
 }

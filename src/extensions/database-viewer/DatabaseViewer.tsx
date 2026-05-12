@@ -69,6 +69,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
     removeColumn,
     renameColumn,
     changeColumnType,
+    updateColumnOptions,
     updateViewConfig,
   } = useDatabase({ content, onContentChange });
 
@@ -209,6 +210,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
             renameColumn={isChat ? undefined : renameColumn}
             removeColumn={isChat ? undefined : removeColumn}
             changeColumnType={isChat ? undefined : changeColumnType}
+            updateColumnOptions={isChat ? undefined : updateColumnOptions}
             onAddColumn={isChat ? undefined : () => setIsAddColumnOpen(true)}
             databaseFilePath={resolvedDatabasePath}
             workspacePath={workspacePath}

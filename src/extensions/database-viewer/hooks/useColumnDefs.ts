@@ -8,6 +8,7 @@ import type {
   SelectColumnDef,
   MultiSelectColumnDef,
   LinkColumnDef,
+  SelectOption,
 } from '../types';
 import TextCell from '../components/cells/TextCell';
 import NumberCell from '../components/cells/NumberCell';
@@ -21,6 +22,7 @@ const columnHelper = createColumnHelper<DatabaseRow>();
 
 interface TableMeta {
   updateCell: (rowId: string, columnId: string, value: unknown) => void;
+  updateColumnOptions?: (columnId: string, options: SelectOption[]) => void;
   databaseFilePath: string | null;
   workspacePath: string | null;
   readOnly?: boolean;
@@ -50,18 +52,30 @@ function renderCell(info: CellContext<DatabaseRow, unknown>, col: ColumnDef): Re
         value: (value as number | null) ?? null,
         onUpdate: (v: number | null) => update(v),
       });
-    case 'select':
+    case 'select': {
+      const selectCol = col as SelectColumnDef;
+      const onAddOption = !readOnly && meta?.updateColumnOptions
+        ? (option: SelectOption) => meta.updateColumnOptions!(col.id, [...selectCol.options, option])
+        : undefined;
       return React.createElement(SelectCell, {
         value: (value as string | null) ?? null,
-        options: (col as SelectColumnDef).options,
+        options: selectCol.options,
         onUpdate: (v: string | null) => update(v),
+        onAddOption,
       });
-    case 'multi-select':
+    }
+    case 'multi-select': {
+      const msCol = col as MultiSelectColumnDef;
+      const onAddOption = !readOnly && meta?.updateColumnOptions
+        ? (option: SelectOption) => meta.updateColumnOptions!(col.id, [...msCol.options, option])
+        : undefined;
       return React.createElement(MultiSelectCell, {
         value: (value as string[] | null) ?? null,
-        options: (col as MultiSelectColumnDef).options,
+        options: msCol.options,
         onUpdate: (v: string[]) => update(v),
+        onAddOption,
       });
+    }
     case 'date':
       return React.createElement(DateCell, {
         value: (value as string | null) ?? null,

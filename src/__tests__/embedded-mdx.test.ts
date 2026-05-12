@@ -40,6 +40,28 @@ describe('wikiLinksToHTML routing (Unit 5)', () => {
     const html = wikiLinksToHTML('![[evil"name.mdx]]');
     expect(html).toContain('data-src="evil&quot;name.mdx"');
   });
+
+  it('routes bangless [[..quipudb.jsonl]] to the embeddedDatabase node', () => {
+    const html = wikiLinksToHTML('see [[tasks.quipudb.jsonl]] for details');
+    expect(html).toContain('data-type="embedded-database"');
+    expect(html).toContain('data-src="tasks.quipudb.jsonl"');
+    // The surrounding text is preserved
+    expect(html).toContain('see ');
+    expect(html).toContain(' for details');
+  });
+
+  it('routes bangless [[..mdx]] to the embeddedMdx node', () => {
+    const html = wikiLinksToHTML('here: [[notes/spec.mdx]]');
+    expect(html).toContain('data-type="embedded-mdx"');
+    expect(html).toContain('data-src="notes/spec.mdx"');
+  });
+
+  it('keeps [[file|label]] as a wikilink with custom label for non-embeddable extensions', () => {
+    const html = wikiLinksToHTML('see [[notes.md|the notes]]');
+    expect(html).toContain('class="wiki-link"');
+    expect(html).toContain('data-wiki-link="notes.md"');
+    expect(html).toContain('>the notes<');
+  });
 });
 
 describe('EmbeddedMdx node (Unit 5)', () => {
