@@ -236,6 +236,37 @@ const MAX_AGENTS = 20;
 // One subprocess per agent for as long as the session lives.
 const agentSessions = new Map(); // sessionKey -> { proc, agentId, buffer }
 
+// ---- Permission-mode + allowed-tools normalizers ----
+
+/**
+ * The agent editor exposes an `auto` permission mode whose hint reads
+ * "Auto-approve — all tools run without asking". Claude Code's CLI only
+ * accepts default | acceptEdits | bypassPermissions | plan, so `auto`
+ * silently failed at the CLI boundary until now. Alias it to
+ * bypassPermissions (the editor's own description for `auto` matches).
+ */
+function normalizePermissionMode(mode) {
+    if (typeof mode !== 'string') return null;
+    if (mode === 'auto') return 'bypassPermissions';
+    return mode;
+}
+
+/**
+ * Claude Code's `--allowedTools` takes a SINGLE argument that's a
+ * space-separated list of tool specifiers (e.g. "Read Edit Bash"). The
+ * previous code spread the array as separate argv elements which made
+ * the second-and-following tools land as positional arguments — Claude
+ * Code ignored them. Join into one string instead.
+ */
+function normalizeAllowedTools(tools) {
+    if (!Array.isArray(tools)) return null;
+    const filtered = tools
+        .filter(t => typeof t === 'string' && t.trim().length > 0)
+        .map(t => t.trim());
+    if (filtered.length === 0) return null;
+    return filtered.join(' ');
+}
+
 const createWindow = () => {
     // Create the browser window.
     const win = new BrowserWindow({
@@ -1334,8 +1365,9 @@ app.whenReady().then(() => {
                 }
             }
         }
-        if (options.permissionMode && typeof options.permissionMode === 'string') {
-            args.push('--permission-mode', options.permissionMode);
+        const normalizedMode = normalizePermissionMode(options.permissionMode);
+        if (normalizedMode) {
+            args.push('--permission-mode', normalizedMode);
         }
 
         const cwd = typeof options.cwd === 'string' && options.cwd.length > 0 ? options.cwd : process.env.HOME;
@@ -1433,8 +1465,9 @@ app.whenReady().then(() => {
             // own UI. The flag isn't in --help but is the same path the Agent SDK uses.
             '--permission-prompt-tool', 'stdio',
         ];
-        if (opts.permissionMode && typeof opts.permissionMode === 'string') {
-            args.push('--permission-mode', opts.permissionMode);
+        const sessionMode = normalizePermissionMode(opts.permissionMode);
+        if (sessionMode) {
+            args.push('--permission-mode', sessionMode);
         }
         if (opts.systemPrompt && typeof opts.systemPrompt === 'string' && opts.systemPrompt.trim().length > 0) {
             args.push('--append-system-prompt', opts.systemPrompt);
@@ -1447,8 +1480,12 @@ app.whenReady().then(() => {
                 if (typeof dir === 'string' && dir.length > 0) args.push('--add-dir', dir);
             }
         }
-        if (Array.isArray(opts.allowedTools) && opts.allowedTools.length > 0) {
-            args.push('--allowedTools', ...opts.allowedTools.filter(t => typeof t === 'string' && t.length > 0));
+        const allowedToolsArg = normalizeAllowedTools(opts.allowedTools);
+        if (allowedToolsArg) {
+            // Single space-separated argument — Claude Code's --allowedTools
+            // takes one string, not spread argv. The previous spread form
+            // dropped every tool after the first.
+            args.push('--allowedTools', allowedToolsArg);
         }
         if (opts.resumeSessionId && typeof opts.resumeSessionId === 'string') {
             args.push('--resume', opts.resumeSessionId);
