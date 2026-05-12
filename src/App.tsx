@@ -17,6 +17,7 @@ import { Dialog } from 'radix-ui';
 import PaneView from './components/ui/PaneView';
 import ActivityBar from './components/ui/ActivityBar';
 import QuickOpen from './components/ui/QuickOpen';
+import WorkspaceFilePicker from './components/ui/WorkspaceFilePicker';
 import TitleBar from './components/ui/TitleBar';
 import ContextMenu from './components/ui/ContextMenu';
 import FolderPicker from './components/ui/FolderPicker';
@@ -192,6 +193,16 @@ function AppContent() {
     onSubmit: (value: string) => void;
   } | null>(null);
   const [inputDialogValue, setInputDialogValue] = useState('');
+  // Workspace file picker — used by Link Database / Link MDX slash
+  // commands so users don't have to navigate the OS dialog to find a
+  // file that lives inside the workspace.
+  const [pickerDialog, setPickerDialog] = useState<{
+    title: string;
+    placeholder: string;
+    match: (rel: string) => boolean;
+    onSelect: (rel: string) => void;
+    onBrowseOutside?: () => void;
+  } | null>(null);
   const [activeDiff, setActiveDiff] = useState<ActiveDiff | null>(null);
   const [showWizard, setShowWizard] = useState(false);
 
@@ -862,63 +873,70 @@ function AppContent() {
 
   // Handle database pick/create events from slash commands and context menus
   useEffect(() => {
-    const handlePickDatabase = async (e: Event) => {
+    const handlePickDatabase = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       const callback = detail?.callback as ((path: string) => void) | undefined;
       if (!callback) return;
 
-      // Browser mode and unavailable-handler cases both surfaced as
-      // "Link Database does nothing" because the previous version only
-      // fell back inside the catch path. fs.openFileDialog returns null
-      // (no throw) in browser mode, so the catch never fired.
-      const promptForPath = () => {
-        setInputDialogValue('');
-        setInputDialog({
-          title: 'Link Database',
-          placeholder: 'Path to .quipudb.jsonl file (relative to workspace)',
-          defaultValue: '',
-          onSubmit: (path: string) => {
-            const trimmed = path.trim();
-            if (trimmed) callback(trimmed);
-          },
-        });
+      // The OS native dialog is the fallback for files outside the
+      // workspace. Inside the workspace we use a cmdk picker — it's
+      // faster than navigating to the workspace folder by hand and
+      // works identically in Electron and browser.
+      const browseOutside = async () => {
+        setPickerDialog(null);
+        if (!window.electronAPI?.openFileDialog) {
+          // Browser mode: no native dialog. Fall back to a path prompt
+          // so the user can still type the path manually.
+          setInputDialogValue('');
+          setInputDialog({
+            title: 'Link Database',
+            placeholder: 'Path to .quipudb.jsonl file (relative to workspace)',
+            defaultValue: '',
+            onSubmit: (path: string) => {
+              const trimmed = path.trim();
+              if (trimmed) callback(trimmed);
+            },
+          });
+          return;
+        }
+        let filePath: string | null = null;
+        try {
+          filePath = await fs.openFileDialog({
+            filters: [
+              { name: 'Quipu Database', extensions: ['quipudb.jsonl', 'jsonl'] },
+              { name: 'All Files', extensions: ['*'] },
+            ],
+          });
+        } catch {
+          return;
+        }
+        if (!filePath) return;
+        let relativePath = filePath;
+        if (workspacePath && filePath.startsWith(workspacePath)) {
+          relativePath = filePath.slice(workspacePath.length + 1);
+        } else if (workspacePath) {
+          showToast('Linked database is outside the workspace', 'warning');
+        }
+        callback(relativePath);
       };
 
-      const hasNativeDialog = !!window.electronAPI?.openFileDialog;
-      if (!hasNativeDialog) {
-        promptForPath();
+      if (!workspacePath) {
+        // No workspace open — there's nothing to scan; jump straight to
+        // the OS dialog / prompt fallback.
+        browseOutside();
         return;
       }
 
-      let filePath: string | null = null;
-      try {
-        filePath = await fs.openFileDialog({
-          // Compound extensions are inconsistent across OS pickers, so we
-          // accept both the canonical .quipudb.jsonl and bare .jsonl.
-          filters: [
-            { name: 'Quipu Database', extensions: ['quipudb.jsonl', 'jsonl'] },
-            { name: 'All Files', extensions: ['*'] },
-          ],
-        });
-      } catch {
-        // Native dialog handler crashed or is missing — fall back so the
-        // user can still link a database.
-        promptForPath();
-        return;
-      }
-
-      // null filePath = user canceled the dialog. Silent — no toast.
-      if (!filePath) return;
-
-      let relativePath = filePath;
-      if (workspacePath && filePath.startsWith(workspacePath)) {
-        relativePath = filePath.slice(workspacePath.length + 1);
-      } else if (workspacePath) {
-        // Path outside the workspace — store absolute but warn the user
-        // so they know the link won't travel with the workspace.
-        showToast('Linked database is outside the workspace', 'warning');
-      }
-      callback(relativePath);
+      setPickerDialog({
+        title: 'Link database',
+        placeholder: 'Type a database name to filter…',
+        match: (rel) => rel.toLowerCase().endsWith('.quipudb.jsonl'),
+        onSelect: (rel: string) => {
+          setPickerDialog(null);
+          callback(rel);
+        },
+        onBrowseOutside: browseOutside,
+      });
     };
 
     const handleCreateDatabase = (e: Event) => {
@@ -964,54 +982,63 @@ function AppContent() {
       openFile(fullPath, fileName);
     };
 
-    // --- MDX inline-embed support — mirrors the database flow exactly,
-    //     down to the browser-mode fallback for the picker.
-    const handlePickMdx = async (e: Event) => {
+    // --- MDX inline-embed support — mirrors the database picker flow.
+    const handlePickMdx = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       const callback = detail?.callback as ((path: string) => void) | undefined;
       if (!callback) return;
 
-      const promptForPath = () => {
-        setInputDialogValue('');
-        setInputDialog({
-          title: 'Link MDX',
-          placeholder: 'Path to .mdx file (relative to workspace)',
-          defaultValue: '',
-          onSubmit: (path: string) => {
-            const trimmed = path.trim();
-            if (trimmed) callback(trimmed);
-          },
-        });
+      const browseOutside = async () => {
+        setPickerDialog(null);
+        if (!window.electronAPI?.openFileDialog) {
+          setInputDialogValue('');
+          setInputDialog({
+            title: 'Link MDX',
+            placeholder: 'Path to .mdx file (relative to workspace)',
+            defaultValue: '',
+            onSubmit: (path: string) => {
+              const trimmed = path.trim();
+              if (trimmed) callback(trimmed);
+            },
+          });
+          return;
+        }
+        let filePath: string | null = null;
+        try {
+          filePath = await fs.openFileDialog({
+            filters: [
+              { name: 'MDX', extensions: ['mdx'] },
+              { name: 'All Files', extensions: ['*'] },
+            ],
+          });
+        } catch {
+          return;
+        }
+        if (!filePath) return;
+        let relativePath = filePath;
+        if (workspacePath && filePath.startsWith(workspacePath)) {
+          relativePath = filePath.slice(workspacePath.length + 1);
+        } else if (workspacePath) {
+          showToast('Linked MDX is outside the workspace', 'warning');
+        }
+        callback(relativePath);
       };
 
-      const hasNativeDialog = !!window.electronAPI?.openFileDialog;
-      if (!hasNativeDialog) {
-        promptForPath();
+      if (!workspacePath) {
+        browseOutside();
         return;
       }
 
-      let filePath: string | null = null;
-      try {
-        filePath = await fs.openFileDialog({
-          filters: [
-            { name: 'MDX', extensions: ['mdx'] },
-            { name: 'All Files', extensions: ['*'] },
-          ],
-        });
-      } catch {
-        promptForPath();
-        return;
-      }
-
-      if (!filePath) return;
-
-      let relativePath = filePath;
-      if (workspacePath && filePath.startsWith(workspacePath)) {
-        relativePath = filePath.slice(workspacePath.length + 1);
-      } else if (workspacePath) {
-        showToast('Linked MDX is outside the workspace', 'warning');
-      }
-      callback(relativePath);
+      setPickerDialog({
+        title: 'Link MDX',
+        placeholder: 'Type an MDX file name to filter…',
+        match: (rel) => rel.toLowerCase().endsWith('.mdx'),
+        onSelect: (rel: string) => {
+          setPickerDialog(null);
+          callback(rel);
+        },
+        onBrowseOutside: browseOutside,
+      });
     };
 
     const handleCreateMdx = (e: Event) => {
@@ -1089,6 +1116,19 @@ function AppContent() {
       )}
       {showFolderPicker && (
         <FolderPicker onSelect={selectFolder} onCancel={cancelFolderPicker} />
+      )}
+
+      {/* Workspace file picker — Link Database / Link MDX flows */}
+      {pickerDialog && (
+        <WorkspaceFilePicker
+          title={pickerDialog.title}
+          workspacePath={workspacePath}
+          match={pickerDialog.match}
+          placeholder={pickerDialog.placeholder}
+          onSelect={pickerDialog.onSelect}
+          onBrowseOutside={pickerDialog.onBrowseOutside}
+          onClose={() => setPickerDialog(null)}
+        />
       )}
 
       {/* Input dialog (replaces window.prompt) */}
