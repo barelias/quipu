@@ -117,6 +117,10 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
   }, [addColumn]);
 
   const isChat = mode === 'chat';
+  // Inline + chat modes live inside another container (the embed wrapper
+  // or the chat card) that already provides horizontal alignment. Only
+  // the standalone viewer applies the --db-h-pad token internally.
+  const innerPadding = mode === 'standalone' ? 'var(--db-h-pad)' : '0';
 
   return (
     <div className={cn(
@@ -146,7 +150,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
       {!isChat && (
       <div
         className="shrink-0 flex items-center gap-2 py-1.5 border-b border-border/30"
-        style={{ paddingInline: 'var(--db-h-pad)' }}
+        style={{ paddingInline: innerPadding }}
       >
         <FilterBar
           columns={schema.columns}
@@ -209,6 +213,7 @@ const DatabaseViewer: React.FC<DatabaseViewerProps> = ({
             databaseFilePath={resolvedDatabasePath}
             workspacePath={workspacePath}
             readOnly={isChat}
+            outerPaddingInline={innerPadding}
           />
         )}
       </div>

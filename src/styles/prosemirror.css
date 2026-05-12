@@ -340,7 +340,9 @@ mark.comment:hover {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0 0 0.35rem 0;
+  /* 0.75rem left padding matches the cells' inline padding so the
+     heading text lines up with the first column content below. */
+  padding: 0 0 0.35rem 0.75rem;
   font-size: 1rem;
 }
 
@@ -358,6 +360,23 @@ mark.comment:hover {
 
 .embedded-database-header-name:hover {
   color: var(--color-accent);
+}
+
+/* Reset ProseMirror's bleed-through table styles for our React-rendered
+   database table. Without this, `.ProseMirror th, .ProseMirror td`
+   (which adds 0.5em padding + 1px border to every cell in the editor)
+   makes our 0-height virtualizer spacer rows render as ~1em "empty"
+   rows, and adds visible cell borders that fight the design. */
+.embedded-database-wrapper table,
+.embedded-database-wrapper th,
+.embedded-database-wrapper td {
+  border: none;
+  margin: 0;
+  vertical-align: middle;
+}
+.embedded-database-wrapper th,
+.embedded-database-wrapper td {
+  padding: 0;
 }
 
 .embedded-database-header-menu {
@@ -426,7 +445,7 @@ mark.comment:hover {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0 0 0.35rem 0;
+  padding: 0 0 0.35rem 0.75rem;
   font-size: 1rem;
 }
 
@@ -444,6 +463,21 @@ mark.comment:hover {
 
 .embedded-mdx-header-name:hover {
   color: var(--color-accent);
+}
+
+/* Same prose-CSS reset as embedded-database-wrapper — MDX bodies can
+   embed charts whose tooltips and labels render tables internally, and
+   inheriting the editor's prose-table styles would distort them. */
+.embedded-mdx-wrapper table,
+.embedded-mdx-wrapper th,
+.embedded-mdx-wrapper td {
+  border: none;
+  margin: 0;
+  vertical-align: middle;
+}
+.embedded-mdx-wrapper th,
+.embedded-mdx-wrapper td {
+  padding: 0;
 }
 
 .embedded-mdx-header-menu {

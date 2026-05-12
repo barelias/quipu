@@ -32,6 +32,9 @@ interface TableViewProps {
    * also hidden. Used by the chat block.
    */
   readOnly?: boolean;
+  /** Horizontal padding for the scroll container — keep the standalone
+   * viewer's --db-h-pad indent but flush the inline / chat modes. */
+  outerPaddingInline?: string;
 }
 
 const ROW_HEIGHT = 36;
@@ -49,6 +52,7 @@ const TableView: React.FC<TableViewProps> = ({
   databaseFilePath = null,
   workspacePath = null,
   readOnly = false,
+  outerPaddingInline = 'var(--db-h-pad)',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const columns = useColumnDefs(schema);
@@ -101,12 +105,13 @@ const TableView: React.FC<TableViewProps> = ({
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Table scroll container — horizontal scroll is internal to the
-          database, never bubbling to the document. The shared --db-h-pad
-          token aligns the first column with the title above. */}
+          database, never bubbling to the document. Outer padding is the
+          --db-h-pad token for standalone mode; inline / chat modes get
+          0 so the first cell aligns with the surrounding container. */}
       <div
         ref={containerRef}
         className="flex-1 overflow-auto"
-        style={{ paddingInline: 'var(--db-h-pad)' }}
+        style={{ paddingInline: outerPaddingInline }}
       >
         <table
           className="border-collapse"
@@ -121,10 +126,13 @@ const TableView: React.FC<TableViewProps> = ({
                   <th
                     key={header.id}
                     className={cn(
-                      'relative text-left px-3 py-1.5 text-page-text/60 font-medium text-xs tracking-wide',
+                      'relative text-left text-page-text/60 font-medium text-xs tracking-wide',
                       'border-b border-border/30 select-none',
                     )}
-                    style={{ width: header.getSize() }}
+                    // Inline padding overrides any prose-CSS padding the
+                    // editor's `.ProseMirror th, td` rule would otherwise
+                    // apply to React-rendered tables nested inside it.
+                    style={{ width: header.getSize(), padding: '0.375rem 0.75rem' }}
                   >
                     <div className="flex items-center gap-1.5">
                       {!header.isPlaceholder && (
@@ -158,7 +166,7 @@ const TableView: React.FC<TableViewProps> = ({
                   </th>
                 ))}
                 {onAddColumn && (
-                  <th className="border-b border-border px-2 py-2 w-10">
+                  <th className="border-b border-border w-10" style={{ padding: '0.375rem 0.5rem' }}>
                     <button
                       onClick={onAddColumn}
                       className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-bg-surface transition-colors"
@@ -195,10 +203,12 @@ const TableView: React.FC<TableViewProps> = ({
                     <td
                       key={cell.id}
                       className={cn(
-                        'px-3 py-1.5 text-sm text-page-text',
+                        'text-sm text-page-text',
                         'overflow-hidden text-ellipsis whitespace-nowrap',
                       )}
-                      style={{ width: cell.column.getSize() }}
+                      // Inline padding overrides the editor's .ProseMirror
+                      // td rule that would otherwise bleed through.
+                      style={{ width: cell.column.getSize(), padding: '0.375rem 0.75rem' }}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
