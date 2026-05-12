@@ -596,19 +596,39 @@ async function installFrameSkills(workspacePath: string): Promise<void> {
   await fs.createFolder(commandsDir);
   await fs.createFolder(scriptsDir);
 
-  // Write template files. Skills are always overwritten so app upgrades
-  // ship updates without per-workspace migration. Hand edits to these
-  // files will be lost — the header comments in each template note this.
-  const files = [
-    { path: skillsDir + '/frame.md', content: FRAME_SKILL },
-    { path: skillsDir + '/mdx.md', content: MDX_SKILL },
-    { path: skillsDir + '/quipudb.md', content: QUIPUDB_SKILL },
+  // Skills are installed as `<name>/SKILL.md` directories (the format
+  // Quipu's slash-command discovery + Claude Code's "rich skill" loader
+  // both look for). The previous flat `<name>.md` layout was valid for
+  // Claude Code itself but invisible to Quipu's command popup.
+  const skillFolders: Array<{ name: string; content: string }> = [
+    { name: 'frame', content: FRAME_SKILL },
+    { name: 'mdx', content: MDX_SKILL },
+    { name: 'quipudb', content: QUIPUDB_SKILL },
+  ];
+
+  for (const skill of skillFolders) {
+    const dir = `${skillsDir}/${skill.name}`;
+    await fs.createFolder(dir);
+    await fs.writeFile(`${dir}/SKILL.md`, skill.content);
+    // Migrate away from the old flat layout: if `<name>.md` lives next
+    // to the new folder, remove it so the slash popup doesn't show a
+    // ghost entry and so Claude Code doesn't see two definitions of the
+    // same skill. Best-effort — silent failure if absent.
+    try {
+      await fs.deletePath(`${skillsDir}/${skill.name}.md`);
+    } catch {
+      /* not present, nothing to clean up */
+    }
+  }
+
+  // Commands + scripts stay as flat files — the commands loader reads
+  // top-level .md files from `.claude/commands/` directly.
+  const supportFiles = [
     { path: commandsDir + '/frame.md', content: FRAME_COMMAND },
     { path: scriptsDir + '/load-frame.sh', content: LOAD_FRAME_SCRIPT },
   ];
 
-  for (const file of files) {
-    // Always write to ensure templates are up-to-date
+  for (const file of supportFiles) {
     await fs.writeFile(file.path, file.content);
   }
 

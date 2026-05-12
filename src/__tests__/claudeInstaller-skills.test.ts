@@ -16,11 +16,16 @@ describe('claudeInstaller — skill templates (Unit 11)', () => {
     expect(source).toMatch(/const\s+QUIPUDB_SKILL\s*=/);
   });
 
-  it('writes all three skill files in installFrameSkills', () => {
+  it('writes all three skills as <name>/SKILL.md folders in installFrameSkills', () => {
     const source = fs.readFileSync(path.join(REPO_SRC, 'services', 'claudeInstaller.ts'), 'utf-8');
-    expect(source).toMatch(/skillsDir \+ '\/frame\.md',\s*content:\s*FRAME_SKILL/);
-    expect(source).toMatch(/skillsDir \+ '\/mdx\.md',\s*content:\s*MDX_SKILL/);
-    expect(source).toMatch(/skillsDir \+ '\/quipudb\.md',\s*content:\s*QUIPUDB_SKILL/);
+    expect(source).toMatch(/\{\s*name:\s*'frame',\s*content:\s*FRAME_SKILL\s*\}/);
+    expect(source).toMatch(/\{\s*name:\s*'mdx',\s*content:\s*MDX_SKILL\s*\}/);
+    expect(source).toMatch(/\{\s*name:\s*'quipudb',\s*content:\s*QUIPUDB_SKILL\s*\}/);
+    // Inside the loop the SKILL.md file is the actual write target.
+    expect(source).toMatch(/SKILL\.md/);
+    // Migration: old flat <name>.md is removed so the popup doesn't
+    // show a ghost entry.
+    expect(source).toMatch(/deletePath\(`\$\{skillsDir\}\/\$\{skill\.name\}\.md`\)/);
   });
 
   it('MDX skill documents the curated component palette', () => {
@@ -50,13 +55,15 @@ describe('Quipu system prompt — Rich rendering (Unit 11)', () => {
   it('appends a Rich rendering section to buildQuipuContextPrompt', () => {
     const source = fs.readFileSync(path.join(REPO_SRC, 'context', 'AgentContext.tsx'), 'utf-8');
     expect(source).toMatch(/## Rich rendering/);
-    expect(source).toMatch(/```mdx/);
-    expect(source).toMatch(/```quipudb\.jsonl/);
+    // The prompt body is inside template literals so backticks are escaped
+    // (`\``). Match the escaped form rather than literal triple-backticks.
+    expect(source).toMatch(/\\`\\`\\`mdx/);
+    expect(source).toMatch(/\\`\\`\\`quipudb\.jsonl/);
     expect(source).toMatch(/Card.*Callout.*Badge.*Stat.*Row.*Col/);
   });
 
   it('explicitly tells the agent to prefer quipudb.jsonl for tabular data', () => {
     const source = fs.readFileSync(path.join(REPO_SRC, 'context', 'AgentContext.tsx'), 'utf-8');
-    expect(source).toMatch(/Prefer .* quipudb\.jsonl over markdown tables/);
+    expect(source).toMatch(/Prefer\s+\\`\\`\\`quipudb\.jsonl\s+over\s+markdown\s+tables/);
   });
 });

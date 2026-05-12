@@ -30,7 +30,9 @@ describe('mdx skill template — .mdx file type section (Unit 6)', () => {
 describe('system prompt — .mdx file type sentence (Unit 6)', () => {
   it('mentions .mdx as a workspace file type with chart auto-refresh and inline embed', () => {
     const source = fs.readFileSync(path.join(REPO_SRC, 'context', 'AgentContext.tsx'), 'utf-8');
-    expect(source).toMatch(/`\.mdx` is also a workspace file type/);
+    // The body sits inside a template literal so the backticks around
+    // `.mdx` are escaped (`\``). Match the escaped form.
+    expect(source).toMatch(/\\`\.mdx\\`\s+is also a workspace file type/);
     expect(source).toMatch(/auto-refresh/);
     expect(source).toMatch(/!\[\[notes\.mdx\]\]/);
   });
