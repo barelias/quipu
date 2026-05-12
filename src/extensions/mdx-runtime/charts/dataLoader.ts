@@ -51,13 +51,33 @@ export function resolveChartSrc(src: string, workspacePath: string | null): stri
   return `${workspacePath}/${src}`;
 }
 
-function detectFormat(src: string): 'csv' | 'tsv' | 'json' | 'jsonl' | 'quipudb' {
+function detectFormat(src: string): 'csv' | 'tsv' | 'json' | 'jsonl' | 'quipudb' | 'dir' {
+  if (src.startsWith('dir:')) return 'dir';
   const lower = src.toLowerCase();
   if (lower.endsWith('.quipudb.jsonl')) return 'quipudb';
   if (lower.endsWith('.tsv')) return 'tsv';
   if (lower.endsWith('.csv')) return 'csv';
   if (lower.endsWith('.jsonl') || lower.endsWith('.ndjson')) return 'jsonl';
   return 'json';
+}
+
+/**
+ * Read a workspace directory and shape its entries as data rows so the
+ * same chart / stat aggregation surface works on file listings. Returns
+ * rows of shape:
+ *   { name: string, path: string, isDirectory: boolean, ext: string }
+ * where `ext` is the lowercase extension (including the dot) for files,
+ * or empty for directories.
+ */
+async function loadDirSource(src: string, workspacePath: string | null): Promise<ChartRow[]> {
+  const rel = src.replace(/^dir:/, '');
+  const fullPath = resolveChartSrc(rel, workspacePath);
+  const entries = await fs.readDirectory(fullPath);
+  return entries.map((e) => {
+    const dot = e.name.lastIndexOf('.');
+    const ext = !e.isDirectory && dot >= 0 ? e.name.slice(dot).toLowerCase() : '';
+    return { name: e.name, path: e.path, isDirectory: e.isDirectory, ext };
+  });
 }
 
 /**
@@ -68,6 +88,11 @@ function detectFormat(src: string): 'csv' | 'tsv' | 'json' | 'jsonl' | 'quipudb'
  * handles CSV/TSV; JSON/JSONL preserve types as authored.
  */
 export async function parseChartFile(text: string, format: ReturnType<typeof detectFormat>): Promise<ChartRow[]> {
+  if (format === 'dir') {
+    // Caller routes dir: sources through loadDirSource directly — this
+    // branch is unreachable for valid use but keeps the union exhaustive.
+    return [];
+  }
   if (!text.trim()) return [];
 
   if (format === 'csv' || format === 'tsv') {
@@ -140,13 +165,17 @@ export function useChartFile(src: string | undefined): ChartDataState {
     }
     let cancelled = false;
     const workspacePath = getWorkspacePath();
-    const fullPath = resolveChartSrc(src, workspacePath);
+    const format = detectFormat(src);
+    // `dir:` sources resolve through readDirectory instead of readFile,
+    // shaping each entry into a row { name, path, isDirectory, ext }.
+    const fullPath = format === 'dir' ? src : resolveChartSrc(src, workspacePath);
 
     async function load() {
       setState(prev => ({ rows: prev.rows, error: null, loading: true }));
       try {
-        const text = await fs.readFile(fullPath);
-        const rows = await parseChartFile(text, detectFormat(src!));
+        const rows = format === 'dir'
+          ? await loadDirSource(src!, workspacePath)
+          : await parseChartFile(await fs.readFile(fullPath), format);
         if (cancelled) return;
         setState({ rows, error: null, loading: false });
       } catch (err) {

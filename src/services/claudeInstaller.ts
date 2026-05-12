@@ -382,7 +382,7 @@ result with a curated component palette.
 | \`<Card>\` | Bordered container, optional title | \`title?: string\`, \`variant?: 'default' \\| 'subtle' \\| 'accent'\` |
 | \`<Callout>\` | Info / warn / error / success banner | \`type?: 'info' \\| 'warn' \\| 'error' \\| 'success'\`, \`title?\` |
 | \`<Badge>\` | Pill-shaped tag | \`color?: 'accent' \\| 'muted' \\| 'success' \\| 'warning' \\| 'error' \\| 'info'\` |
-| \`<Stat>\` | Big-number metric with optional label and hint | \`label?\`, \`value?\`, \`hint?\` |
+| \`<Stat>\` | Big-number metric. Static \`value\` OR live from a file/dir via \`src + aggregate + where\` | \`label?\`, \`value?\`, \`hint?\`, \`src?\`, \`aggregate?: 'count' \\| 'sum' \\| 'avg' \\| 'min' \\| 'max' \\| 'first'\`, \`column?\`, \`where?\`, \`precision?\` |
 | \`<Row>\` / \`<Col>\` | Horizontal layout | \`<Row gap='sm' \\| 'md' \\| 'lg'>\`, \`<Col grow={1}>\` |
 | \`<LineChart>\` | Line chart (one line per series) | \`x\`, \`y: string \\| string[]\`, optional \`series\` for long data |
 | \`<BarChart>\` | Bar chart, optionally stacked | \`x\`, \`y\`, optional \`series\`, \`stacked\` |
@@ -420,6 +420,34 @@ the file with the Read tool before writing the chart MDX so you know what
 the real column headers are. Guessing — \`x="index"\` when the CSV header
 is actually \`year\` — renders an empty chart with an error message but
 costs the user a round trip.
+
+## Live stats — \`<Stat src=...>\`
+
+\`<Stat>\` accepts the same data sources as charts. Add \`src\` + \`aggregate\`
+(default \`count\`) to compute the value from a workspace file or directory
+listing — no manually-maintained numbers in the MDX.
+
+\`\`\`mdx
+<Stat label="Tasks total"  src="project/Tasks.quipudb.jsonl" />
+<Stat label="Tasks done"   src="project/Tasks.quipudb.jsonl" where="status=done" />
+<Stat label="Average score" src="evaluations.csv" aggregate="avg" column="score" precision={1} />
+<Stat label="Repositories" src="dir:./repos" where="isDirectory=true" />
+<Stat label="Markdown docs" src="dir:./docs"  where="ext=.md" />
+\`\`\`
+
+\`src="dir:./<path>"\` reads the immediate children of a workspace directory
+and returns rows shaped \`{ name, path, isDirectory, ext }\` — combine
+with \`where\` to count only directories, only files of a given extension,
+etc. The same dataset can drive a \`<PieChart>\` for visual breakdown.
+
+\`aggregate\` options:
+- \`count\` (default) — number of matching rows
+- \`sum\` / \`avg\` / \`min\` / \`max\` — over the numeric \`column\`
+- \`first\` — the first row's \`column\` value (useful for "most recent" if data is sorted)
+
+\`where\` syntax: comma-separated \`column op value\` clauses combined with
+AND. Supported ops: \`=\`, \`!=\`, \`>\`, \`<\`, \`>=\`, \`<=\`. Values are coerced
+(\`true\`/\`false\` to boolean, numeric strings to numbers).
 
 Markdown inside MDX renders with Quipu's chat typography — paragraphs,
 headings, lists, blockquotes, inline code, links.
